@@ -43,11 +43,14 @@ CREATE TABLE IF NOT EXISTS rooms (
     last_active     REAL
 );
 -- a player is just a name + token scoped to one room (no account / password).
+-- discord_id (optional) links the player to a logged-in Discord user so they can
+-- find + rejoin their rooms from any device.
 CREATE TABLE IF NOT EXISTS players (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     room_code     TEXT NOT NULL,
     display_name  TEXT NOT NULL,
     player_token  TEXT NOT NULL,
+    discord_id    TEXT,
     joined_at     REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS ledger (
@@ -89,6 +92,10 @@ def init():
             _conn.execute("ALTER TABLE rooms ADD COLUMN mode TEXT NOT NULL DEFAULT 'normal'")
         if "shuffle_s" not in cols:
             _conn.execute("ALTER TABLE rooms ADD COLUMN shuffle_s REAL NOT NULL DEFAULT 120")
+        # migrate older DBs: link players to a Discord user
+        pcols = [r[1] for r in _conn.execute("PRAGMA table_info(players)").fetchall()]
+        if "discord_id" not in pcols:
+            _conn.execute("ALTER TABLE players ADD COLUMN discord_id TEXT")
         # migrate older DBs: per-player discovered tier (defaults legacy rows to 1)
         disc_cols = [r[1] for r in _conn.execute("PRAGMA table_info(discovered)").fetchall()]
         if "level" not in disc_cols:
@@ -175,15 +182,32 @@ def update_mode(code: str, mode: str, shuffle_s: float):
 
 
 # ── players ──────────────────────────────────────────────────────────────
-def add_player(room_code: str, display_name: str):
+def add_player(room_code: str, display_name: str, discord_id: str = None):
     token = secrets.token_urlsafe(18)
-    cur = _q("INSERT INTO players(room_code, display_name, player_token, joined_at) "
-             "VALUES (?,?,?,?)", (room_code, display_name, token, time.time()))
+    cur = _q("INSERT INTO players(room_code, display_name, player_token, discord_id, joined_at) "
+             "VALUES (?,?,?,?,?)", (room_code, display_name, token, discord_id, time.time()))
     return cur.lastrowid, token
 
 
 def get_player(player_id: int):
     return _q("SELECT * FROM players WHERE id=?", (player_id,)).fetchone()
+
+
+def get_player_by_discord(room_code: str, discord_id: str):
+    """The player a logged-in Discord user already has in this room (for dedup +
+    rejoin), most-recent first if somehow duplicated."""
+    return _q("SELECT * FROM players WHERE room_code=? AND discord_id=? ORDER BY id DESC",
+              (room_code, discord_id)).fetchone()
+
+
+def rooms_for_discord(discord_id: str):
+    """Rooms a Discord user has a player in — their personal 'rejoin' list."""
+    rows = _q(
+        "SELECT r.code, r.pub_id, r.name, r.last_active, p.id AS player_id, "
+        "  (p.id = r.host_player_id) AS is_host "
+        "FROM players p JOIN rooms r ON r.code = p.room_code "
+        "WHERE p.discord_id = ? ORDER BY r.last_active DESC", (discord_id,)).fetchall()
+    return [dict(r) for r in rows]
 
 
 def player_by_token(room_code: str, player_id: int, player_token: str):

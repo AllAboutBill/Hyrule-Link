@@ -156,27 +156,65 @@ async def delete_room(handle: str, request: Request):
     return {"ok": True}
 
 
+def _discord_id(request: Request):
+    sess = auth.session_from_cookies(request.cookies)
+    return sess.get("uid") if sess else None
+
+
 @app.post("/api/rooms")
-def create_room(payload: dict = Body(...)):
+def create_room(request: Request, payload: dict = Body(...)):
     name = (payload.get("name") or "Co-op").strip()
     cooldown = float(payload.get("cooldown_s", 5))
     display = (payload.get("display_name") or "Player").strip()
     code = db.create_room(name, cooldown)
-    player_id, token = db.add_player(code, display)
+    player_id, token = db.add_player(code, display, _discord_id(request))
     db.set_host(code, player_id)        # creator is the host/admin
     return _room_payload(code, player_id, token)
 
 
 @app.post("/api/rooms/{code}/join")
-def join_room(code: str, payload: dict = Body(...)):
+def join_room(code: str, request: Request, payload: dict = Body(...)):
     code = code.upper()
     if not db.get_room(code):
         raise HTTPException(404, "no such room")
     display = (payload.get("display_name") or "Player").strip()
-    player_id, token = db.add_player(code, display)
+    # a logged-in user who's already in this room rejoins their existing player
+    # (keeps items) instead of piling up duplicates.
+    discord_id = _discord_id(request)
+    if discord_id:
+        existing = db.get_player_by_discord(code, discord_id)
+        if existing:
+            db.touch_room(code); hub.refresh_names(code)
+            return _room_payload(code, existing["id"], existing["player_token"])
+    player_id, token = db.add_player(code, display, discord_id)
     db.touch_room(code)
     hub.refresh_names(code)
     return _room_payload(code, player_id, token)
+
+
+@app.get("/api/my-rooms")
+def my_rooms(request: Request):
+    """Rooms the logged-in Discord user has a player in (their rejoin list)."""
+    discord_id = _discord_id(request)
+    if not discord_id:
+        return {"rooms": []}
+    return {"rooms": db.rooms_for_discord(discord_id)}
+
+
+@app.post("/api/rooms/{code}/rejoin")
+def rejoin_room(code: str, request: Request):
+    """Re-enter a room as your existing Discord-linked player (any device)."""
+    discord_id = _discord_id(request)
+    if not discord_id:
+        raise HTTPException(401, "log in with Discord first")
+    code = code.upper()
+    if not db.get_room(code):
+        raise HTTPException(404, "no such room")
+    p = db.get_player_by_discord(code, discord_id)
+    if not p:
+        raise HTTPException(404, "you're not in that room")
+    db.touch_room(code); hub.refresh_names(code)
+    return _room_payload(code, p["id"], p["player_token"])
 
 
 @app.post("/api/rooms/{code}/resume")

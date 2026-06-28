@@ -89,7 +89,7 @@ function showHome() {
   loadMe();
   loadRooms();
   if (!state.roomsTimer) state.roomsTimer = setInterval(() => {
-    if (!$("rooms").classList.contains("hidden")) loadRooms();
+    if (!$("rooms").classList.contains("hidden")) { loadRooms(); loadMyRooms(); }
   }, 8000);
 }
 
@@ -97,8 +97,43 @@ async function loadMe() {
   try {
     state.me = await api("/api/me");
   } catch (e) { state.me = { logged_in: false, admin: false, login_enabled: false }; }
+  // auto-fill the name field from your Discord name (unless you've set one)
+  const nameInput = $("entry-name");
+  if (state.me.logged_in && state.me.name && nameInput && !nameInput.value.trim()) {
+    nameInput.value = state.me.name;
+    state.name = state.me.name;
+  }
   renderAuth();
   renderRoomsList();
+  loadMyRooms();
+}
+
+async function loadMyRooms() {
+  const sec = $("my-rooms");
+  if (!state.me || !state.me.logged_in) { sec.classList.add("hidden"); return; }
+  try {
+    const data = await api("/api/my-rooms");
+    const rooms = data.rooms || [];
+    sec.classList.toggle("hidden", rooms.length === 0);
+    $("my-rooms-list").innerHTML = rooms.map((r) => `
+      <li>
+        <span class="room-meta">
+          <strong>${escapeHtml(r.name || "Co-op")}</strong>
+          <span class="muted">${r.is_host ? "★ host · " : ""}${fmtAgo(r.last_active)}</span>
+        </span>
+        <span class="room-row-actions">
+          <button class="small" data-rejoin="${escapeHtml(r.code)}">Rejoin</button>
+        </span>
+      </li>`).join("");
+    $("my-rooms-list").querySelectorAll("button[data-rejoin]").forEach((b) => {
+      b.onclick = () => rejoinRoom(b.getAttribute("data-rejoin"));
+    });
+  } catch (e) { sec.classList.add("hidden"); }
+}
+
+async function rejoinRoom(code) {
+  try { enterRoom(await api(`/api/rooms/${code}/rejoin`, {})); }
+  catch (e) { alert(e.message || "couldn't rejoin"); }
 }
 
 function renderAuth() {
@@ -112,7 +147,7 @@ function renderAuth() {
     $("logout-btn").onclick = async () => {
       try { await fetch("/auth/logout", { method: "POST" }); } catch (e) {}
       state.me = { logged_in: false, admin: false, login_enabled: me.login_enabled };
-      renderAuth(); renderRoomsList();
+      renderAuth(); renderRoomsList(); loadMyRooms();
     };
   } else if (me.login_enabled) {
     el.innerHTML = `<a class="discord-btn" href="/auth/login">Login with Discord</a>`;
