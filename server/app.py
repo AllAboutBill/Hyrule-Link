@@ -107,7 +107,8 @@ async def auth_callback(code: str = "", state: str = ""):
         return RedirectResponse("/?login=error")
     try:
         prof = await asyncio.to_thread(auth.fetch_profile, code)
-    except Exception:
+    except Exception as e:
+        print(f"[auth] discord login failed: {e}")
         return RedirectResponse("/?login=error")
     sess = auth.sign({"uid": prof["id"], "name": prof["name"], "avatar": prof["avatar"],
                       "admin": prof["is_admin"], "exp": time.time() + auth.SESSION_TTL})

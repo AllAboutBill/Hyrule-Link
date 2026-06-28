@@ -20,10 +20,14 @@ import hmac
 import json
 import os
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
 DISCORD_API = "https://discord.com/api"
+# Discord's CDN (Cloudflare) blocks the default Python-urllib agent with error
+# 1010 — every API call MUST send a real User-Agent.
+USER_AGENT = "HyruleLink (https://hyrulelink.billogna.lol, 1.0)"
 SCOPES = "identify guilds guilds.members.read"
 SESSION_COOKIE = "hl_session"
 SESSION_TTL = 7 * 86400          # 1 week
@@ -96,15 +100,22 @@ def authorize_url(state: str) -> str:
 def _post_form(url: str, data: dict) -> dict:
     req = urllib.request.Request(
         url, data=urllib.parse.urlencode(data).encode(), method="POST",
-        headers={"Content-Type": "application/x-www-form-urlencoded"})
-    with urllib.request.urlopen(req, timeout=12) as r:
-        return json.loads(r.read())
+        headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=12) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"discord {url} -> {e.code}: {e.read().decode('utf-8', 'replace')[:300]}")
 
 
 def _get(url: str, token: str):
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req, timeout=12) as r:
-        return json.loads(r.read())
+    req = urllib.request.Request(
+        url, headers={"Authorization": f"Bearer {token}", "User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=12) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"discord {url} -> {e.code}: {e.read().decode('utf-8', 'replace')[:300]}")
 
 
 def fetch_profile(code: str) -> dict:
