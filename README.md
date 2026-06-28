@@ -32,6 +32,38 @@ The **server** is the single source of truth. **Agents and browsers dial OUT**
 to it over one WebSocket, so it can live on a public host (your droplet) and
 every remote player just needs the URL — no port-forwarding.
 
+## Web UI style
+
+The `web/` view shares **billogna.lol's "aurora" design language** (2026-06-28
+restyle) so the spectator page and the main site feel like one product.
+
+- **Palette:** mint `#b3ffc8`, violet `#8a6bff`, blue `#5eadff` over near-black
+  `#070709`. No pink — accents are mint/violet/blue only.
+- **Type:** [Unbounded](https://fonts.google.com/specimen/Unbounded) for
+  headings, [DM Mono](https://fonts.google.com/specimen/DM+Mono) for body.
+- **Background layers** (all `aria-hidden`, behind the content): three drifting
+  gradient blobs → a faint **pixel field** canvas (`nexus-bg.js`) → an SVG
+  **noise** grain overlay.
+- **Pixel-hover gimmick:** interactive elements fill with a subtle grayscale /
+  steel-blue **pixel shimmer** on hover/focus, ported from billogna.lol.
+  Borderless text (logo, header links) gets a soft radial edge-fade instead of a
+  hard rectangle.
+- **Cards & buttons** are translucent "glass" (`backdrop-filter: blur`) so the
+  pixel field shows through; the item `#grid` buttons are excluded from the
+  hover effect (too many, recreated often).
+
+Style-only files in `web/` (no game logic):
+
+```
+style.css        aurora palette, blobs, glass cards, .hl-pixel-* helpers
+nexus-bg.js      animated pixel-field background canvas (#nexus-pixels)
+pixel-canvas.js  Ryan Mulligan's <pixel-canvas> web component
+pixel-hover.js   injects <pixel-canvas> behind buttons / links / logo on hover
+```
+
+Mirror billogna.lol if you re-theme: keep these in sync with the copies under
+that site's `shared/` so both stay on the same palette and component versions.
+
 ## Shared pool
 
 Progression items only: sword, shield, mail, gloves, bow, boots, hookshot, fire/
