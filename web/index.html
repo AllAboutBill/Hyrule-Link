@@ -51,13 +51,29 @@
       <p id="entry-err" class="err"></p>
     </section>
 
+    <!-- Live rooms (public) -->
+    <section id="rooms" class="card hidden">
+      <div class="room-head">
+        <h2>Live rooms</h2>
+        <button id="rooms-refresh" class="ghost small">Refresh</button>
+      </div>
+      <ul id="rooms-list" class="rooms-list"></ul>
+      <p id="rooms-empty" class="muted hidden">No active rooms right now.</p>
+      <div id="admin-unlock" class="admin-unlock hidden">
+        <label class="muted">Admin key
+          <input id="admin-key" type="password" placeholder="enter to manage any room" autocomplete="off" />
+        </label>
+        <span id="admin-state" class="pill"></span>
+      </div>
+    </section>
+
     <!-- Room -->
     <section id="room" class="hidden">
       <div class="room-head card">
         <div>
           <h2 id="room-title"></h2>
-          <div class="muted">Room code: <strong id="room-code"></strong> ·
-            <span id="ws-status" class="pill">connecting…</span></div>
+          <div class="muted"><span id="room-code-wrap">Room code: <strong id="room-code"></strong> ·
+            </span><span id="ws-status" class="pill">connecting…</span></div>
         </div>
         <div class="room-actions">
           <button id="btn-connect-game" class="ghost small">Connect your game ▾</button>

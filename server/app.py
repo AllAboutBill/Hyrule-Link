@@ -12,6 +12,26 @@ import asyncio
 import os
 import time
 
+
+def _load_dotenv():
+    """Load KEY=VALUE lines from a repo-root `.env` into the environment (real
+    env vars win). Keeps secrets like HYRULELINK_ADMIN_KEY out of git and out of
+    the command line. Must run before anything below reads os.environ."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+    except FileNotFoundError:
+        pass
+
+
+_load_dotenv()
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Header, Body
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,7 +39,7 @@ from fastapi.staticfiles import StaticFiles
 from server import db
 from server.ledger import hub, resolve_pickup, resolve_claim
 from shared import protocol as P
-from shared.items import ITEMS
+from shared.items import ITEMS, item_image
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 
@@ -28,6 +48,16 @@ db.init()
 
 # Rooms idle longer than this are auto-deleted (with their players/ledger).
 ROOM_TTL_DAYS = float(os.environ.get("HYRULELINK_ROOM_TTL_DAYS", "14"))
+
+# Global-admin secret. When set (env), a client that presents it can manage ANY
+# room (delete it, kick anyone, toggle found/owner) regardless of who hosts it.
+# Empty => global admin disabled entirely.
+ADMIN_KEY = os.environ.get("HYRULELINK_ADMIN_KEY", "")
+
+
+def _require_admin(key: str):
+    if not ADMIN_KEY or key != ADMIN_KEY:
+        raise HTTPException(403, "admin only")
 
 
 def _prune_rooms():
@@ -56,6 +86,25 @@ async def _prune_loop():
 
 
 # ── room REST (no accounts — name + room code only) ─────────────────────────
+@app.get("/api/rooms")
+def list_rooms():
+    """Public list of live rooms for the 'watch' picker on the home page."""
+    return {"rooms": db.list_rooms(), "admin_enabled": bool(ADMIN_KEY)}
+
+
+@app.post("/api/rooms/{handle}/delete")
+async def delete_room(handle: str, x_admin_key: str = Header(default="")):
+    _require_admin(x_admin_key)
+    # admins act on the public handle (that's all the list exposes), but accept a
+    # raw code too for convenience.
+    row = db.get_room_by_pub(handle) or db.get_room(handle.upper())
+    if row:
+        code = row["code"]
+        await hub.drop_room(code)    # close live connections + forget in memory
+        db.delete_room(code)         # then remove persisted rows
+    return {"ok": True}
+
+
 @app.post("/api/rooms")
 def create_room(payload: dict = Body(...)):
     name = (payload.get("name") or "Co-op").strip()
@@ -99,6 +148,7 @@ def _room_payload(code, player_id, player_token):
     row = db.get_room(code)
     return {
         "code": code,
+        "pub_id": row["pub_id"],
         "name": row["name"],
         "cooldown_s": row["cooldown_s"],
         "host": row["host_player_id"],
@@ -107,7 +157,8 @@ def _room_payload(code, player_id, player_token):
         "players": [
             {"id": p["id"], "name": p["display_name"]} for p in db.room_players(code)
         ],
-        "items": [{"key": it.key, "name": it.name} for it in ITEMS],
+        "items": [{"key": it.key, "name": it.name,
+                   "image": item_image(it.key, it.present)} for it in ITEMS],
     }
 
 
@@ -115,43 +166,54 @@ def _room_payload(code, player_id, player_token):
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
-    code = user_id = role = None
+    code = role = None
+    user_id = None
     try:
         hello = await ws.receive_json()
         if hello.get("type") != P.HELLO:
             await ws.send_json({"type": P.REJECT, "reason": "expected hello"})
             await ws.close()
             return
-        code = (hello.get("room") or "").upper()
-        user_id = int(hello.get("player_id", 0))
-        token = hello.get("token", "")
         role = hello.get("role")
+        is_admin = bool(ADMIN_KEY) and hello.get("admin_key", "") == ADMIN_KEY
 
-        if not db.player_by_token(code, user_id, token):
-            await ws.send_json({"type": P.REJECT, "reason": "bad room/player token"})
-            await ws.close()
-            return
-        room = hub.get_room(code)
+        if role == P.ROLE_SPECTATOR:
+            # watchers address the room by its PUBLIC handle, never the join code
+            handle = hello.get("watch") or hello.get("room") or ""
+            row = db.get_room_by_pub(handle) or db.get_room(handle.upper())
+            code = row["code"] if row else None
+            user_id = None
+        else:
+            code = (hello.get("room") or "").upper()
+
+        room = hub.get_room(code) if code else None
         if room is None:
             await ws.send_json({"type": P.REJECT, "reason": "room not found"})
             await ws.close()
             return
+
+        if role != P.ROLE_SPECTATOR:
+            user_id = int(hello.get("player_id", 0))
+            if not db.player_by_token(code, user_id, hello.get("token", "")):
+                await ws.send_json({"type": P.REJECT, "reason": "bad room/player token"})
+                await ws.close()
+                return
         db.touch_room(code)
         hub.refresh_names(code)
 
         if role == P.ROLE_AGENT:
             await _serve_agent(ws, code, user_id)
         else:
-            await _serve_ui(ws, code, user_id)
+            await _serve_ui(ws, code, user_id, is_admin)
     except WebSocketDisconnect:
         pass
     finally:
-        if code is not None and user_id is not None:
-            if role == P.ROLE_AGENT:
+        if code is not None:
+            if role == P.ROLE_AGENT and user_id is not None:
                 hub.unregister_agent(code, user_id, ws)
                 if code in hub.rooms:
                     await hub.broadcast_state(code)  # show agent offline
-            else:
+            elif role != P.ROLE_AGENT:
                 hub.unregister_ui(code, ws)
 
 
@@ -191,15 +253,26 @@ async def _serve_agent(ws, code, user_id):
         # APPLIED acks are informational; ignored for now.
 
 
-async def _serve_ui(ws, code, user_id):
-    hub.register_ui(code, user_id, ws)
+async def _serve_ui(ws, code, user_id, is_admin=False):
+    hub.register_ui(code, user_id, ws, is_admin=is_admin)
     payload = hub.serialize(code)
     payload["you"] = user_id
+    payload["admin"] = is_admin
+    payload["spectator"] = user_id is None and not is_admin
+    # include the catalog so watchers can render the full grid without joining
+    payload["items"] = [{"key": it.key, "name": it.name,
+                         "image": item_image(it.key, it.present)} for it in ITEMS]
     await ws.send_json(payload)
     while True:
         msg = await ws.receive_json()
         mtype = msg.get("type")
+        if code not in hub.rooms:
+            await ws.send_json({"type": P.REJECT, "reason": "room closed"})
+            return
         if mtype == P.CLAIM:
+            if user_id is None:        # spectators/admins have no player to claim with
+                await ws.send_json({"type": P.REJECT, "reason": "watch-only — join in the app to claim"})
+                continue
             room = hub.rooms[code]
             eff = resolve_claim(room, user_id, msg.get("item"))
             if eff.reject:
@@ -208,7 +281,7 @@ async def _serve_ui(ws, code, user_id):
                 await hub.dispatch(code, eff, msg.get("item"))
         elif mtype in (P.ADMIN_SET_COOLDOWN, P.ADMIN_REMOVE_PLAYER,
                        P.ADMIN_SET_DISCOVERED, P.ADMIN_SET_OWNER):
-            if user_id != hub.rooms[code].host:
+            if not (is_admin or user_id == hub.rooms[code].host):
                 await ws.send_json({"type": P.REJECT, "reason": "host only"})
                 continue
             if mtype == P.ADMIN_SET_COOLDOWN:

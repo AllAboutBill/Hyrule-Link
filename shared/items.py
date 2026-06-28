@@ -13,10 +13,11 @@ Each entry is a `Item`:
     addr       WRAM offset (== SNES addr - $7E0000); the SRAM mirror lives here
     kind       how the byte is interpreted / written:
                  "simple"      0 = absent, 1 = present (single byte)
-                 "progressive" 0..cap tiers; the token carries the max tier found
+                 "progressive" 0..cap tiers; each owner gets back their own best
+                               tier (the highest level THEY have found), not a
+                               shared max
                  "bitfield"    one bit of a shared byte (boomerangs, etc.)
                  "boots"       like simple but also toggles the dash-ability flag
-                 "bottle"      empty-bottle value (2) written to a bottle slot
     mask       for "bitfield": which bit of `addr` this token owns
     cap        for "progressive": highest tier
     present    for "progressive": lowest tier that counts as "discovered"
@@ -44,7 +45,7 @@ class Item:
     present: int = 1
     # byte value written to grant this item. Usually 1, but some slots need a
     # specific value (Magic Mirror = 2; 1 renders a broken icon — the "scroll"
-    # state — and isn't usable). Bottles use 2 (empty bottle).
+    # state — and isn't usable).
     give: int = 1
     effect_key: Optional[str] = None
     # progressive tier labels for the UI, index 0..cap (optional)
@@ -99,9 +100,8 @@ ITEMS: List[Item] = [
          effect_key="powder"),
     Item("shovel", "Shovel", 0xF34C, "bitfield", mask=0x01, effect_key="shovel"),
     Item("flute",  "Flute",  0xF34C, "bitfield", mask=0x02, effect_key="flute"),
-
-    # ── bottles (v1: a single shared "bottle" token = one empty bottle) ──
-    Item("bottle", "Bottle", 0xF35C, "bottle", give=2),
+    # Bottles are intentionally NOT pooled: they behave like consumables
+    # (rupees/bombs/arrows), so sharing one bottle token was broken and pointless.
 ]
 
 BY_KEY: Dict[str, Item] = {it.key: it for it in ITEMS}
@@ -111,12 +111,12 @@ PROGRESSIVE_KEYS = {it.key for it in ITEMS if it.kind == "progressive"}
 BITFIELD_KEYS = {it.key for it in ITEMS if it.kind == "bitfield"}
 
 # Generic {key: (addr, value)} map for sni.item_effects.ItemManager — the simple
-# byte-write items plus the bottle. Bitfields/boots/bow are handled specially by
-# ItemManager via effect_key, so they are intentionally not listed here.
+# byte-write items. Bitfields/boots/bow are handled specially by ItemManager via
+# effect_key, so they are intentionally not listed here.
 ITEM_ADDRESSES = {
     it.key: (it.addr, it.give)
     for it in ITEMS
-    if it.kind in ("simple", "bottle")
+    if it.kind == "simple"
 }
 
 
@@ -130,8 +130,6 @@ def discovered_level(item: Item, raw_byte: int) -> int:
     """
     if item.kind == "bitfield":
         return 1 if (raw_byte & item.mask) else 0
-    if item.kind == "bottle":
-        return 1 if raw_byte else 0
     if item.kind == "boots":
         return 1 if raw_byte else 0
     if item.kind == "simple":
@@ -147,3 +145,23 @@ def tier_label(item: Item, level: int) -> str:
     if item.tiers and 0 <= level < len(item.tiers):
         return item.tiers[level]
     return "owned" if level > 0 else "—"
+
+
+# Item icons (sprites from the ALTTPR tracker, see web/items/). Items listed here
+# have per-tier art `<key>-1.png` … `<key>-N.png`; every other item has a single
+# `<key>.png`. Keep this in sync with the files in web/items/.
+ITEM_IMAGE_TIERS = {"sword": 4, "shield": 3, "armor": 2, "gloves": 2, "bow": 2}
+
+
+def item_image(key: str, level: int = 0) -> str:
+    """Filename (within web/items/) for an item at a given level.
+
+    Progressive items return their tier art (`sword-2.png` = Master); level 0 or a
+    non-tiered item falls back to the item's base sprite. The returned name is
+    used both by the web grid (/static/items/<name>) and the desktop app.
+    """
+    maxtier = ITEM_IMAGE_TIERS.get(key)
+    if maxtier:
+        n = min(max(level, 1), maxtier)   # clamp into 1..N; level 0 → base art
+        return f"{key}-{n}.png"
+    return f"{key}.png"

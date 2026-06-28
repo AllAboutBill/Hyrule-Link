@@ -2,7 +2,7 @@
 effects.py — translate ledger commands into correct WRAM writes.
 
 Thin wrapper over the vendored sni.item_effects.ItemManager so we can enable an
-item at an *exact* level (the ledger's max-found tier) and disable it cleanly,
+item at an *exact* level (the owner's own found tier) and disable it cleanly,
 without clobbering shared bytes. ItemManager already handles the nasty cases
 (boots' run-ability flag, bitfield boomerang/mushroom/shovel halves, silver-bow
 + arrows); we only add exact-level setting for progressive items.
@@ -34,8 +34,6 @@ class Effects:
             self.mgr._add_boots()
         elif item.kind == "bitfield":
             self.mgr.add(item.effect_key)
-        elif item.kind == "bottle":
-            self.t.write_memory(item.addr, bytes([0x02]))  # empty bottle
         else:  # simple single-byte
             self.mgr.add(key)
         return self._read(item.addr)
@@ -48,8 +46,6 @@ class Effects:
             self.mgr._remove_boots()
         elif item.kind == "bitfield":
             self.mgr.remove(item.effect_key)
-        elif item.kind == "bottle":
-            self.t.write_memory(item.addr, bytes([0x00]))
         else:
             self.mgr.remove(key)
         return self._read(item.addr)

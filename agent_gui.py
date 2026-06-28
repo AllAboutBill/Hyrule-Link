@@ -12,6 +12,7 @@ Run via "Play.cmd", or:  pythonw agent_gui.py
 import json
 import os
 import queue
+import random
 import socket
 import subprocess
 import sys
@@ -26,13 +27,23 @@ from tkinter import ttk, messagebox, filedialog
 
 import websocket  # websocket-client
 
+try:                                  # optional: item sprites in the board
+    from PIL import Image, ImageTk, ImageOps
+except Exception:                     # app still runs without icons
+    Image = ImageTk = ImageOps = None
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
+from shared.items import item_image, ITEMS, BY_KEY   # local catalog (don't trust server's list)
+
 SETTINGS = os.path.join(HERE, "agent", "gui_settings.json")
 PUBLIC_SERVER = "https://hyrulelink.billogna.lol"   # default shared server
 SNI_DIR = os.path.join(HERE, "tools", "sni")        # bundled SNI bridge (MIT)
+ITEMS_DIR = os.path.join(HERE, "web", "items")      # item sprite PNGs (shared w/ web)
+ICON_PX = 30                                        # board item sprite size
+CARD_MIN_PX = 132                                   # min item-card width → column count
 
 # Open-mode ALTTPR settings for in-app seed generation (assured sword = quick start).
 OPEN_SEED_SETTINGS = {
@@ -46,10 +57,15 @@ OPEN_SEED_SETTINGS = {
     "entrances": "none",
 }
 
-# palette matched to billogna.lol (deep-space / nebula)
-BG = "#070611"; PANEL = "#121a30"; PANEL2 = "#1a2340"; INK = "#e7ecff"; MUTED = "#9aa4c2"
-GOLD = "#ffd700"; GREEN = "#34d399"; RED = "#ef4444"; BLUE = "#06b6d4"; LINE = "#2a3360"
-ACCENT = "#6d7dff"; ACCENT2 = "#9a6bff"   # indigo / purple brand accents
+# palette — billogna.lol's "aurora" design language (see README "Web UI style").
+# mint / violet / blue over near-black; no pink. Tk can't render the web's
+# translucent "glass" or backdrop blur, so the rgba() card/border tokens are
+# flattened to the solid colours they resolve to over the near-black background.
+BG = "#070709"; PANEL = "#15131d"; PANEL2 = "#211f2d"; INK = "#e8e6f0"; MUTED = "#8f8da3"
+GOLD = "#ffd700"; GREEN = "#b3ffc8"; RED = "#ff6b7a"; BLUE = "#5eadff"; LINE = "#2a2838"
+ACCENT = "#b3ffc8"; ACCENT2 = "#8a6bff"   # mint (primary) / violet (secondary) accents
+# Note: GREEN==ACCENT (mint) and BLUE map the web's --green/--accent and --cyan
+# states; "mine" reads mint, "owned by another" reads blue, "owner/host" stays gold.
 
 
 def _register_bundled_fonts():
@@ -165,11 +181,22 @@ class App(tk.Tk):
         _register_bundled_fonts()
         super().__init__()
         import tkinter.font as tkfont
-        self.logo_font = "Orbitron" if "Orbitron" in tkfont.families() else "Segoe UI Semibold"
+        fams = tkfont.families()
+        # Headings use the web's display face (Unbounded); fall back to the bundled
+        # Orbitron, then a system semibold. Body/log prefer DM Mono like the site,
+        # falling back to Consolas (always present on Windows). Drop Unbounded.ttf /
+        # DMMono.ttf into tools/fonts to match the website exactly.
+        self.logo_font = next((f for f in ("Unbounded", "Orbitron") if f in fams),
+                              "Segoe UI Semibold")
+        self.mono_font = "DM Mono" if "DM Mono" in fams else "Consolas"
         self.title("HyruleLink")
         self.configure(bg=BG)
-        self.geometry("900x700")
-        self.minsize(680, 600)
+        # Open wide and as tall as the screen allows, so the multi-column board
+        # fits without scrolling (clamped so it still fits smaller displays).
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        self.geometry(f"{min(1180, sw - 80)}x{min(900, sh - 80)}")
+        self.minsize(720, 560)
+        self._board_cols = 0          # current item-grid column count (responsive)
 
         self.cfg = load_settings()
         self.base = self.cfg.get("server", PUBLIC_SERVER)
@@ -197,10 +224,18 @@ class App(tk.Tk):
         self._detected = ("emu", None, "not detected")
         self._stop_all = threading.Event()
 
+        # animated "aurora" pixel-field backgrounds (faked nexus-bg.js); each is a
+        # Canvas registered here and pumped by _animate_fields on the UI thread.
+        self._fields = []
+        self._closing = False
+        self._icon_cache = {}       # (filename, dim) -> PhotoImage (kept alive here)
+        self._manage_win = None     # host's per-item found/owner popup (if open)
+
         self._build_chrome()
         self.show_start()
         threading.Thread(target=self._detect_loop, daemon=True).start()
         self._tick()
+        self._animate_fields()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _detect_loop(self):
@@ -214,13 +249,26 @@ class App(tk.Tk):
 
     # ── chrome ──────────────────────────────────────────────────────────────
     def _build_chrome(self):
-        head = tk.Frame(self, bg=BG); head.pack(fill="x", padx=16, pady=(12, 2))
-        tk.Label(head, text="HyruleLink", fg=ACCENT, bg=BG,
-                 font=(self.logo_font, 18, "bold")).pack(side="left")
-        self.who = tk.Label(head, text="", fg=MUTED, bg=BG, font=("Segoe UI", 9))
-        self.who.pack(side="right")
-        # glowing accent line under the header (echoes the web's header glow)
-        tk.Frame(self, bg=ACCENT, height=2).pack(fill="x", padx=16, pady=(0, 2))
+        # Header is a live pixel-field banner — the closest Tk can get to the
+        # site's nexus-bg.js field (widgets are opaque, so the field can only sit
+        # behind chrome, not show *through* the cards like the web's glass does).
+        HEAD_H = 64
+        self.header = tk.Canvas(self, height=HEAD_H, bg=BG, highlightthickness=0)
+        self.header.pack(fill="x")
+        self._attach_pixel_field(self.header, cell=24)
+        self.header.create_text(18, HEAD_H // 2 - 1, anchor="w", text="HyruleLink",
+                                fill=ACCENT, font=(self.logo_font, 18, "bold"), tags="fg")
+        self._who_id = self.header.create_text(0, HEAD_H // 2 - 1, anchor="e", text="",
+                                               fill=MUTED, font=("Segoe UI", 9), tags="fg")
+        # mint underline echoing the web header's glow
+        self._head_rule = self.header.create_rectangle(0, HEAD_H - 2, 0, HEAD_H,
+                                                        fill=ACCENT, outline="", tags="fg")
+
+        def _layout_header(e):
+            self.header.coords(self._who_id, e.width - 18, HEAD_H // 2 - 1)
+            self.header.coords(self._head_rule, 0, HEAD_H - 2, e.width, HEAD_H)
+            self.header.tag_raise("fg")
+        self.header.bind("<Configure>", _layout_header, add="+")
 
         self.body = tk.Frame(self, bg=BG); self.body.pack(fill="both", expand=True, padx=16, pady=4)
 
@@ -242,14 +290,17 @@ class App(tk.Tk):
         e = tk.Entry(parent, show=show, bg=PANEL, fg=INK, insertbackground=INK,
                      relief="flat", font=("Segoe UI", 11))
         e.insert(0, value)
-        e.configure(highlightthickness=1, highlightbackground=LINE, highlightcolor=GOLD)
+        e.configure(highlightthickness=1, highlightbackground=LINE, highlightcolor=ACCENT)
         return e
 
     def _button(self, parent, text, cmd, primary=False, small=False):
+        # primary CTAs are filled mint with near-black ink (the web's "lean mint"
+        # CTAs); on hover they brighten rather than switch hue. Mint is too light
+        # for white text, so primary foreground is the near-black bg colour.
         return tk.Button(parent, text=text, command=cmd, relief="flat", cursor="hand2",
-                         bg=ACCENT if primary else PANEL2, fg="#ffffff" if primary else INK,
-                         activebackground=ACCENT2 if primary else LINE,
-                         activeforeground="#ffffff" if primary else INK,
+                         bg=ACCENT if primary else PANEL2, fg=BG if primary else INK,
+                         activebackground="#c9ffd8" if primary else LINE,
+                         activeforeground=BG if primary else INK,
                          font=("Segoe UI Semibold", 9 if small else 11), bd=0,
                          padx=10 if small else 14, pady=4 if small else 8)
 
@@ -260,9 +311,108 @@ class App(tk.Tk):
     def _dot(self, canvas, color):
         canvas.delete("all"); canvas.create_oval(2, 2, 11, 11, fill=color, outline="")
 
+    def _item_icon(self, filename, dim=False):
+        """Load + cache an item sprite scaled to ICON_PX (grayscaled/faded when
+        `dim`). Returns a Tk image or None if Pillow/the file is unavailable."""
+        if Image is None or not filename:
+            return None
+        ckey = (filename, dim)
+        if ckey in self._icon_cache:
+            return self._icon_cache[ckey]
+        path = os.path.join(ITEMS_DIR, filename)
+        try:
+            img = Image.open(path).convert("RGBA")
+        except Exception:
+            self._icon_cache[ckey] = None
+            return None
+        img.thumbnail((ICON_PX, ICON_PX), Image.LANCZOS)   # keep aspect, fit box
+        if dim:                                            # grayscale + faded
+            gray = ImageOps.grayscale(img)
+            alpha = img.split()[3].point(lambda v: int(v * 0.5))
+            img = Image.merge("RGBA", (gray, gray, gray, alpha))
+        photo = ImageTk.PhotoImage(img)
+        self._icon_cache[ckey] = photo
+        return photo
+
+    # ── faked "aurora" pixel-field background (port of web/nexus-bg.js) ───────
+    # The site layers a chunky grayscale block grid at opacity .30 / soft-light
+    # over the near-black bg. Tk canvases have no per-item alpha, so we bake the
+    # alpha+opacity down into an opaque colour composited over BG and draw flat
+    # rectangles — visually the same faint steel field, just not see-through.
+    _BG_RGB = (0x07, 0x07, 0x09)   # BG = #070709
+
+    def _blend_pixel(self, value, alpha):
+        eff = (alpha / 255.0) * 0.30          # web: opacity .30 over the bg
+        out = []
+        for v, b in zip((value, value, value), self._BG_RGB):
+            out.append(max(0, min(255, int(b + (v - b) * eff))))
+        return "#%02x%02x%02x" % tuple(out)
+
+    def _new_pixel(self):
+        """A block's (value, alpha) using nexus-bg.js's three brightness tiers."""
+        base = random.random()
+        if base < 0.45:
+            return 20 + random.random() * 40, 120     # mostly-dark
+        if base < 0.85:
+            return 80 + random.random() * 70, 140      # mid steel
+        return 180 + random.random() * 40, 160         # occasional bright
+
+    def _attach_pixel_field(self, canvas, cell=24):
+        """Fill `canvas` with a chunky pixel grid that rebuilds on resize.
+        Registers it for the shared drift animation in _animate_fields."""
+        field = {"cell": cell, "cells": [], "cols": 0, "rows": 0}
+        canvas._field = field
+
+        def rebuild(_=None):
+            w, h = canvas.winfo_width(), canvas.winfo_height()
+            if w <= 1 or h <= 1:
+                return
+            cols, rows = w // cell + 1, h // cell + 1
+            if cols == field["cols"] and rows == field["rows"]:
+                return
+            canvas.delete("pxf")
+            field["cols"], field["rows"], field["cells"] = cols, rows, []
+            for r in range(rows):
+                for c in range(cols):
+                    value, alpha = self._new_pixel()
+                    rid = canvas.create_rectangle(
+                        c * cell, r * cell, (c + 1) * cell, (r + 1) * cell,
+                        fill=self._blend_pixel(value, alpha), outline="", tags="pxf")
+                    field["cells"].append({"id": rid, "value": value,
+                                           "alpha": alpha, "target": None})
+            canvas.tag_lower("pxf")     # keep the field behind foreground items
+            canvas.tag_raise("fg")
+
+        canvas.bind("<Configure>", rebuild, add="+")
+        self._fields.append(canvas)
+        rebuild()
+
+    def _animate_fields(self):
+        """Slowly drift every registered field — only blocks mid-transition are
+        recoloured, so this stays cheap even with a few hundred cells."""
+        if self._closing:
+            return
+        for canvas in self._fields:
+            field = getattr(canvas, "_field", None)
+            if not field:
+                continue
+            for p in field["cells"]:
+                if p["target"] is None:
+                    if random.random() < 0.02:       # retarget a few each tick
+                        p["target"], p["alpha"] = self._new_pixel()
+                    continue
+                p["value"] += (p["target"] - p["value"]) * 0.08
+                if abs(p["target"] - p["value"]) < 1.5:
+                    p["value"], p["target"] = p["target"], None
+                canvas.itemconfig(p["id"], fill=self._blend_pixel(p["value"], p["alpha"]))
+        self.after(140, self._animate_fields)
+
+    def _set_who(self, text):
+        self.header.itemconfig(self._who_id, text=text)
+
     # ── step 1: name + host/join ────────────────────────────────────────────
     def show_start(self):
-        self._clear_body(); self.who.config(text="")
+        self._clear_body(); self._set_who("")
         f = self.body
         self._label(f, "Start playing", fg=ACCENT, font=(self.logo_font, 14, "bold")).pack(anchor="w", pady=(6, 10))
 
@@ -523,13 +673,15 @@ class App(tk.Tk):
     # ── step 2: room (board + emulator + controls) ──────────────────────────
     def show_room(self):
         self._clear_body()
-        self.who.config(text=f"{self.cfg.get('display','Player')} · room {self.room['code']}")
+        self._set_who(f"{self.cfg.get('display','Player')} · room {self.room['code']}")
         f = self.body
 
         top = tk.Frame(f, bg=BG); top.pack(fill="x")
         tk.Label(top, text=f"Room {self.room['code']}", fg=GOLD, bg=BG,
                  font=(self.logo_font, 15, "bold")).pack(side="left")
-        self._button(top, "Spectator view", lambda: webbrowser.open(f"{self.base}/"),
+        self._button(top, "Spectator view",
+                     lambda: webbrowser.open(
+                         f"{self.base}/?watch={self.room.get('pub_id') or self.room['code']}"),
                      small=True).pack(side="right")
         self._button(top, "Leave", self._leave, small=True).pack(side="right", padx=6)
 
@@ -558,22 +710,23 @@ class App(tk.Tk):
         self.host_bar = tk.Frame(f, bg=BG)
         self._build_host_bar()
 
-        # the board (scrollable grid)
+        # the board (responsive grid: fills width, reflows columns to stay wide)
         board_wrap = tk.Frame(f, bg=BG); board_wrap.pack(fill="both", expand=True)
         self.canvas = tk.Canvas(board_wrap, bg=BG, highlightthickness=0)
         sb = ttk.Scrollbar(board_wrap, orient="vertical", command=self.canvas.yview)
         self.board = tk.Frame(self.canvas, bg=BG)
         self.board.bind("<Configure>",
                         lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
-        self.canvas.create_window((0, 0), window=self.board, anchor="nw")
+        self._board_window = self.canvas.create_window((0, 0), window=self.board, anchor="nw")
         self.canvas.configure(yscrollcommand=sb.set)
         self.canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
+        self.canvas.bind("<Configure>", self._on_canvas_resize)
         self.canvas.bind_all("<MouseWheel>", lambda e: self.canvas.yview_scroll(int(-e.delta/120), "units"))
 
         # activity (short)
-        self.logbox = tk.Text(f, height=4, bg="#0a0f1a", fg=GREEN, relief="flat",
-                              font=("Consolas", 9), highlightthickness=1, highlightbackground=LINE)
+        self.logbox = tk.Text(f, height=3, bg="#0b0b10", fg=GREEN, relief="flat",
+                              font=(self.mono_font, 9), highlightthickness=1, highlightbackground=LINE)
         self.logbox.pack(fill="x", pady=(6, 0)); self.logbox.configure(state="disabled")
 
         if self.state:
@@ -587,7 +740,7 @@ class App(tk.Tk):
         self.e_cd = self._entry(self.host_bar)
         self.e_cd.configure(width=4); self.e_cd.pack(side="left")
         self._button(self.host_bar, "set", self._set_cooldown, small=True).pack(side="left", padx=4)
-        tk.Label(self.host_bar, text="· click a player below to remove",
+        tk.Label(self.host_bar, text="· click a player to remove · right-click an item to manage found/owner",
                  fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=8)
 
     def _is_host(self):
@@ -622,6 +775,72 @@ class App(tk.Tk):
         if messagebox.askyesno("HyruleLink", f"Remove {name} from the room?"):
             self._ui_send({"type": "admin_remove_player", "player_id": pid})
 
+    # ── host: per-item found/owner management (right-click an item) ───────────
+    def _bind_recursive(self, widget, sequence, func):
+        widget.bind(sequence, func)
+        for ch in widget.winfo_children():
+            self._bind_recursive(ch, sequence, func)
+
+    def _manage_item(self, key, name):
+        """Host-only popup to fix who has 'found' an item and who owns it — mirrors
+        the web's per-item chips for when the app is the only screen open."""
+        if not self._is_host():
+            return
+        win = getattr(self, "_manage_win", None)
+        if win is not None and win.winfo_exists():
+            win.destroy()
+        win = tk.Toplevel(self); win.title(f"Manage — {name}"); win.configure(bg=BG)
+        win.transient(self); win.geometry("380x430")
+        self._manage_win = win; self._manage_key = key
+        tk.Label(win, text=name, fg=GOLD, bg=BG,
+                 font=(self.logo_font, 13, "bold")).pack(anchor="w", padx=14, pady=(12, 2))
+        tk.Label(win, text="Found = they've discovered it (so they can Claim it). "
+                 "Owner = who holds it right now. Use this to fix a player's state after "
+                 "a disconnect.", fg=MUTED, bg=BG, font=("Segoe UI", 8),
+                 wraplength=350, justify="left").pack(anchor="w", padx=14, pady=(0, 8))
+        self._manage_body = tk.Frame(win, bg=BG)
+        self._manage_body.pack(fill="both", expand=True, padx=8)
+        self._button(win, "Close", win.destroy, primary=True).pack(anchor="e", padx=14, pady=10)
+        win.protocol("WM_DELETE_WINDOW", lambda: (setattr(self, "_manage_win", None), win.destroy()))
+        self._refresh_manage()
+
+    def _refresh_manage(self):
+        win = getattr(self, "_manage_win", None)
+        if win is None or not win.winfo_exists():
+            self._manage_win = None
+            return
+        body = self._manage_body
+        for w in body.winfo_children():
+            w.destroy()
+        key = self._manage_key
+        it = (self.state or {}).get("ledger", {}).get(key, {})
+        discovered = set(it.get("discovered", []))
+        owner = it.get("owner")
+        players = (self.state or {}).get("players", [])
+        if not players:
+            tk.Label(body, text="No players in the room yet.", fg=MUTED, bg=BG,
+                     font=("Segoe UI", 9)).pack(anchor="w", padx=8, pady=6)
+        for p in players:
+            row = tk.Frame(body, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+            row.pack(fill="x", padx=6, pady=3)
+            var = tk.BooleanVar(value=p["id"] in discovered)
+            tk.Checkbutton(
+                row, text="found", variable=var,
+                command=lambda pid=p["id"], v=var: self._ui_send(
+                    {"type": "admin_set_discovered", "player_id": pid, "item": key, "found": v.get()}),
+                fg=INK, bg=PANEL, selectcolor=PANEL2, activebackground=PANEL,
+                activeforeground=INK, font=("Segoe UI", 9)).pack(side="left", padx=(6, 4), pady=4)
+            star = "★ " if p["id"] == self.state.get("host") else ""
+            tk.Label(row, text=f"{star}{p['name']}", fg=INK, bg=PANEL,
+                     font=("Segoe UI", 10)).pack(side="left")
+            is_owner = (owner == p["id"])
+            self._button(
+                row, "● owner" if is_owner else "make owner",
+                lambda pid=p["id"], cur=is_owner: self._ui_send(
+                    {"type": "admin_set_owner", "item": key,
+                     "player_id": (None if cur else pid)}),
+                small=True).pack(side="right", padx=6)
+
     def _render_board(self):
         for w in self.board.winfo_children():
             w.destroy()
@@ -634,46 +853,88 @@ class App(tk.Tk):
             self.host_bar.pack_forget()
 
         ledger = self.state.get("ledger", {})
-        cols = 3
-        for i, cat in enumerate(self.room["items"]):
-            e = ledger.get(cat["key"])
+        cols = self._board_columns()
+        self._board_cols = cols
+        # Render from the LOCAL catalog so a stale server (e.g. one still pooling
+        # Bottle) can never inject items we've removed. Order/names are canonical.
+        for i, it in enumerate(ITEMS):
+            cat = {"key": it.key, "name": it.name}
+            e = ledger.get(it.key)
             self._card(self.board, cat, e).grid(row=i // cols, column=i % cols,
-                                                 padx=5, pady=5, sticky="nsew")
+                                                 padx=4, pady=3, sticky="nsew")
+        # equal-width columns that stretch to fill the canvas (wider, fewer rows)
         for c in range(cols):
-            self.board.grid_columnconfigure(c, weight=1, minsize=200)
+            self.board.grid_columnconfigure(c, weight=1, minsize=CARD_MIN_PX, uniform="items")
+        for c in range(cols, 12):                 # clear any columns from a wider layout
+            self.board.grid_columnconfigure(c, weight=0, minsize=0, uniform="")
+        self._refresh_manage()                    # keep an open host popup in sync
+
+    def _board_columns(self):
+        """How many item columns fit the current board width — favouring a wide,
+        short grid. Falls back to a sensible count before the canvas is sized."""
+        w = self.canvas.winfo_width() if hasattr(self, "canvas") else 0
+        if w <= 1:
+            w = 1040                              # pre-layout default (window width-ish)
+        return max(4, min(10, w // CARD_MIN_PX))
+
+    def _on_canvas_resize(self, event):
+        # keep the grid as wide as the viewport, and reflow columns when the count
+        # changes so the board stays wider-than-tall as the window resizes.
+        self.canvas.itemconfig(self._board_window, width=event.width)
+        if self.state and self._board_columns() != self._board_cols:
+            self._render_board()
 
     def _card(self, parent, cat, e):
         you = self.state.get("you")
-        border = LINE; sub = "undiscovered"; subcolor = MUTED; tier = ""
+        border = LINE
         mine = e and e.get("owner") == you
         if e:
             owner = e.get("owner_name") or "unowned"
             sub = f"held by {owner}"
             if e.get("owner"):
                 border = GREEN if mine else BLUE
-            if e.get("tier") and e["tier"] != "—":
-                tier = "  " + e["tier"]
+            if e.get("tier") and e["tier"] != "—":   # icon shows tier too; label it briefly
+                sub = f"{e['tier']} · {sub}"
+        else:
+            sub = "undiscovered"
         card = tk.Frame(parent, bg=PANEL, highlightbackground=GREEN if mine else border,
                         highlightthickness=2 if mine else 1)
-        tk.Label(card, text=cat["name"] + tier, fg=INK, bg=PANEL,
-                 font=("Segoe UI Semibold", 10), anchor="w").pack(fill="x", padx=8, pady=(7, 0))
-        tk.Label(card, text=sub, fg=subcolor, bg=PANEL, font=("Segoe UI", 8), anchor="w").pack(fill="x", padx=8)
+        # Vertical tile: centered sprite, name + status below. Giving the name the
+        # full card width keeps it on one line even in a dense, narrow grid.
+        # Resolve the sprite locally from key+level so icons work against ANY
+        # server (the public host may not send an `image` field).
+        level = e.get("level", 0) if e else 0
+        icon = self._item_icon(item_image(cat["key"], level), dim=not e)
+        if icon is not None:
+            il = tk.Label(card, image=icon, bg=PANEL)
+            il.image = icon                      # extra ref guard (cache also holds it)
+            il.pack(pady=(4, 1))
+        tk.Label(card, text=cat["name"], fg=INK, bg=PANEL, font=("Segoe UI Semibold", 9),
+                 wraplength=CARD_MIN_PX, justify="center").pack(fill="x", padx=3)
+        tk.Label(card, text=sub, fg=MUTED, bg=PANEL, font=("Segoe UI", 8),
+                 wraplength=CARD_MIN_PX, justify="center").pack(fill="x", padx=3)
 
-        action = tk.Frame(card, bg=PANEL); action.pack(fill="x", padx=8, pady=6)
+        action = tk.Frame(card, bg=PANEL); action.pack(pady=(1, 4))
         if not e:
-            tk.Label(action, text="—", fg=MUTED, bg=PANEL, font=("Segoe UI", 8)).pack(anchor="w")
+            tk.Label(action, text="—", fg=MUTED, bg=PANEL, font=("Segoe UI", 8)).pack()
         elif mine:
             tk.Label(action, text="✓ you hold this", fg=GREEN, bg=PANEL,
-                     font=("Segoe UI Semibold", 9)).pack(anchor="w")
+                     font=("Segoe UI Semibold", 9)).pack()
         elif you not in e.get("discovered", []):
             tk.Label(action, text="find one to claim", fg=GOLD, bg=PANEL,
-                     font=("Segoe UI", 8)).pack(anchor="w")
+                     font=("Segoe UI", 8)).pack()
         elif e.get("cooldown_remaining", 0) > 0.05:
             tk.Label(action, text=f"cooldown {e['cooldown_remaining']:.0f}s", fg=MUTED, bg=PANEL,
-                     font=("Segoe UI", 8)).pack(anchor="w")
+                     font=("Segoe UI", 8)).pack()
         else:
             self._button(action, "Claim", lambda k=cat["key"]: self._ui_send({"type": "claim", "item": k}),
-                         small=True).pack(anchor="w")
+                         small=True).pack()
+        # host: right-click anywhere on a card to manage found/owner per player
+        if self._is_host():
+            card.configure(cursor="hand2")
+            self._bind_recursive(
+                card, "<Button-3>",
+                lambda ev, k=cat["key"], n=cat["name"]: self._manage_item(k, n))
         return card
 
     def _show_emu_help(self):
@@ -800,7 +1061,7 @@ class App(tk.Tk):
             pass
         self.agent = None; self.transport = None
         if hasattr(self, "btn_connect"):
-            self.btn_connect.config(text="Connect & Play", bg=ACCENT, fg="#ffffff")
+            self.btn_connect.config(text="Connect & Play", bg=ACCENT, fg=BG)
         self._log("Emulator unlinked.")
 
     def _leave(self):
@@ -1001,7 +1262,13 @@ class App(tk.Tk):
             elif t == "event":
                 self._log(msg.get("text", ""));
             elif t == "reject":
-                self._log("⚠ " + msg.get("reason", ""))
+                reason = msg.get("reason", "")
+                self._log("⚠ " + reason)
+                if self.room is not None and ("room not found" in reason.lower()
+                                              or "room closed" in reason.lower()):
+                    messagebox.showinfo("HyruleLink", "This room was closed by an admin.")
+                    self._leave()
+                    break          # stop draining; rest of _tick handles room=None
         if new_state and self.room is not None and hasattr(self, "board"):
             self._render_board()
 
@@ -1040,6 +1307,7 @@ class App(tk.Tk):
         self.after(800, self._tick)
 
     def _on_close(self):
+        self._closing = True            # stops the pixel-field animation loop
         self._stop_all.set(); self._ui_stop.set(); self._disconnect()
         for proc in (self.tunnel_proc, self.local_server, self.sni_proc):
             if proc and proc.poll() is None:

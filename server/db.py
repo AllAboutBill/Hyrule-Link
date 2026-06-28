@@ -32,8 +32,9 @@ def _connect():
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS rooms (
-    code            TEXT PRIMARY KEY,
+    code            TEXT PRIMARY KEY,   -- private join secret (never listed publicly)
     name            TEXT NOT NULL,
+    pub_id          TEXT,               -- public watch handle (safe to list)
     host_player_id  INTEGER,
     cooldown_s      REAL NOT NULL DEFAULT 5,
     created_at      REAL NOT NULL,
@@ -59,6 +60,7 @@ CREATE TABLE IF NOT EXISTS discovered (
     room_code  TEXT NOT NULL,
     item_key   TEXT NOT NULL,
     player_id  INTEGER NOT NULL,
+    level      INTEGER NOT NULL DEFAULT 1,   -- this player's own best tier found
     PRIMARY KEY (room_code, item_key, player_id)
 );
 """
@@ -74,6 +76,16 @@ def init():
         if "last_active" not in cols:
             _conn.execute("ALTER TABLE rooms ADD COLUMN last_active REAL")
         _conn.execute("UPDATE rooms SET last_active = COALESCE(last_active, created_at)")
+        # migrate older DBs: public watch handle (back-fill a random id per room)
+        if "pub_id" not in cols:
+            _conn.execute("ALTER TABLE rooms ADD COLUMN pub_id TEXT")
+        for row in _conn.execute("SELECT code FROM rooms WHERE pub_id IS NULL").fetchall():
+            _conn.execute("UPDATE rooms SET pub_id=? WHERE code=?",
+                          (secrets.token_urlsafe(9), row[0]))
+        # migrate older DBs: per-player discovered tier (defaults legacy rows to 1)
+        disc_cols = [r[1] for r in _conn.execute("PRAGMA table_info(discovered)").fetchall()]
+        if "level" not in disc_cols:
+            _conn.execute("ALTER TABLE discovered ADD COLUMN level INTEGER NOT NULL DEFAULT 1")
         _conn.commit()
 
 
@@ -86,15 +98,40 @@ def _q(sql, params=()):
 
 # ── rooms ────────────────────────────────────────────────────────────────
 def create_room(name: str, cooldown_s: float = 5.0) -> str:
-    code = secrets.token_hex(3).upper()  # 6-char join code
+    code = secrets.token_hex(3).upper()       # 6-char private join code
+    pub_id = secrets.token_urlsafe(9)         # public watch handle (~12 chars)
     now = time.time()
-    _q("INSERT INTO rooms(code, name, host_player_id, cooldown_s, created_at, last_active) "
-       "VALUES (?,?,?,?,?,?)", (code, name, None, cooldown_s, now, now))
+    _q("INSERT INTO rooms(code, name, pub_id, host_player_id, cooldown_s, created_at, last_active) "
+       "VALUES (?,?,?,?,?,?,?)", (code, name, pub_id, None, cooldown_s, now, now))
     return code
 
 
 def get_room(code: str):
     return _q("SELECT * FROM rooms WHERE code=?", (code,)).fetchone()
+
+
+def get_room_by_pub(pub_id: str):
+    return _q("SELECT * FROM rooms WHERE pub_id=?", (pub_id,)).fetchone()
+
+
+def list_rooms():
+    """Public 'live rooms' list — exposes only the public watch handle (`pub_id`)
+    and never the private join `code`, so rooms can be watched but only joined as
+    a player by someone who was given the code."""
+    rows = _q(
+        "SELECT r.pub_id, r.name, r.created_at, r.last_active, "
+        "  (SELECT COUNT(*) FROM players p WHERE p.room_code = r.code) AS players "
+        "FROM rooms r WHERE r.pub_id IS NOT NULL ORDER BY r.last_active DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_room(code: str):
+    """Delete one room and everything scoped to it."""
+    with _lock:
+        for tbl in ("players", "ledger", "discovered"):
+            _conn.execute(f"DELETE FROM {tbl} WHERE room_code=?", (code,))
+        _conn.execute("DELETE FROM rooms WHERE code=?", (code,))
+        _conn.commit()
 
 
 def touch_room(code: str):
@@ -171,9 +208,10 @@ def upsert_ledger(room_code, item_key, owner_player_id, level, cooldown_until):
        (room_code, item_key, owner_player_id, level, cooldown_until))
 
 
-def add_discovered(room_code, item_key, player_id):
-    _q("INSERT OR IGNORE INTO discovered(room_code, item_key, player_id) VALUES (?,?,?)",
-       (room_code, item_key, player_id))
+def add_discovered(room_code, item_key, player_id, level=1):
+    _q("INSERT INTO discovered(room_code, item_key, player_id, level) VALUES (?,?,?,?) "
+       "ON CONFLICT(room_code, item_key, player_id) DO UPDATE SET level=excluded.level",
+       (room_code, item_key, player_id, level))
 
 
 def remove_discovered(room_code, item_key, player_id):

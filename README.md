@@ -12,8 +12,10 @@ held by **only one player at a time**.
 - A wants it back → clicks **Claim** in the web app; A's sword re-enables and
   B's disables.
 - You can only **Claim** an item you have **personally found** at least once.
-- The shared token carries the **highest tier found** — claim "the sword" and
-  you get whatever the best version anyone has discovered is (e.g. Gold).
+- Progressive tiers are **per player**: you get back the best version **you**
+  have personally found. If A found a Master Sword and B found a Gold Sword,
+  claiming "the sword" gives **A a Master** and **B a Gold** — A only reaches
+  Gold once A finds Tempered/Gold themselves.
 
 It works by reading/writing SNES WRAM live (the SRAM mirror at `$7EF000`),
 exactly like the reference tools it was built from (TwitchBot SNI, AlttprHelper,
@@ -59,18 +61,26 @@ style.css        aurora palette, blobs, glass cards, .hl-pixel-* helpers
 nexus-bg.js      animated pixel-field background canvas (#nexus-pixels)
 pixel-canvas.js  Ryan Mulligan's <pixel-canvas> web component
 pixel-hover.js   injects <pixel-canvas> behind buttons / links / logo on hover
+items/           item sprites (ALTTPR tracker art) shown in the board
 ```
 
 Mirror billogna.lol if you re-theme: keep these in sync with the copies under
 that site's `shared/` so both stay on the same palette and component versions.
+
+**Item sprites** (`web/items/<key>.png`, plus `<key>-1..N.png` for progressive
+tiers) come from the ALTTPR community tracker and are shared by both UIs: the web
+grid loads them from `/static/items/`, and the desktop app scales/dims them with
+Pillow. `shared.items.item_image(key, level)` is the single source of truth for
+which sprite a given item/tier uses, so the two views never drift.
 
 ## Shared pool
 
 Progression items only: sword, shield, mail, gloves, bow, boots, hookshot, fire/
 ice rod, bombos/ether/quake, lamp, hammer, bug net, book, somaria, byrna, cape,
 mirror, flippers, moon pearl, blue/red boomerang, mushroom, powder, shovel,
-flute, magic upgrade, bottle. **Excluded:** ammo (rupees/bombs/arrows/hearts)
-and per-dungeon items (keys/maps/compasses).
+flute, magic upgrade. **Excluded:** ammo (rupees/bombs/arrows/hearts), bottles
+(they're consumable-like, not progression), and per-dungeon items
+(keys/maps/compasses).
 
 > ⚠ Disabling movement items (Moon Pearl, Flippers, Gloves) can briefly strand a
 > robbed player until they Claim something back. That's the intended tension —
@@ -107,8 +117,24 @@ all inside the app window. The room code is the only thing you share. **Re-joini
 the same room** reconnects you as the *same* player (your items are kept), not a
 duplicate.
 
-> The web page (`http://server:5019/`) still works as an optional **spectator /
-> second-screen** view — join it with the same name + room code.
+> The web page (`http://server:5019/`) is the **spectator / second-screen** view.
+> Its home page lists **live rooms by name** — click **Watch** to spectate any
+> room read-only (no account, no player created). Rooms are **public to watch but
+> private to play**: the join **code is never shown in the list**, so only people
+> you give the code to can join as a player (paste it in *Join with a code*).
+> `…/?watch=<public-id>` deep-links straight into watching (the app's *Spectator
+> view* button uses this; players still share the secret code out-of-band).
+
+### Host & admin controls
+
+- **Host** (whoever created the room) gets controls in both the app and the web:
+  set the steal **cooldown**, **remove** a player, and **right-click any item**
+  (app) / use the **player chips** (web) to fix who has *found* an item or who
+  *owns* it — handy after a disconnect.
+- **Global admin (you).** Set `HYRULELINK_ADMIN_KEY` in the server's environment.
+  On the web home page an **Admin key** box appears; enter the key to **delete any
+  room** and to **manage / kick** in *any* room (not just ones you host). With no
+  key set, global admin is disabled.
 
 > **Supported emulators (all auto-detected):**
 > - **snes9x-nwa** (EmuNetworkAccess build) — direct, nothing extra.
@@ -135,6 +161,14 @@ python run_agent.py --setup                 # player: login/join, writes config
 python run_agent.py                          # player: connect + play
 ```
 
+Server environment variables:
+
+```
+HYRULELINK_ADMIN_KEY    secret that unlocks global admin on the web (unset = off)
+HYRULELINK_ROOM_TTL_DAYS  auto-delete rooms idle this long (default 14)
+HYRULELINK_DB           sqlite path (default server/hyrulelink.db)
+```
+
 Or run a specific config (several agents on one PC):
 `python run_agent.py --config agent/config_a.json`.
 
@@ -159,7 +193,6 @@ reported automatically; grants/revokes are written into your game live.
 
 - Only one client may attach to a QUsb2Snes device at a time — close
   EmoTracker/LiveSplit if the agent can't attach.
-- Bottles are a single shared token (one empty bottle) in v1.
 - Detection only fires while in a playable game mode, so file-select/transition
   bytes never produce phantom pickups.
 - The agent echo-cancels its own writes, so applying a grant/revoke never

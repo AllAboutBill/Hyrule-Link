@@ -56,3 +56,4 @@ REJECT = "reject"
 
 ROLE_AGENT = "agent"
 ROLE_UI = "ui"
+ROLE_SPECTATOR = "spectator"   # read-only watcher: no player, no token, no claims
