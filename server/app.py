@@ -74,6 +74,16 @@ def _prune_rooms():
 async def _startup():
     _prune_rooms()
     asyncio.create_task(_prune_loop())
+    asyncio.create_task(_shuffle_loop())
+
+
+async def _shuffle_loop():
+    while True:
+        await asyncio.sleep(1)
+        try:
+            await hub.tick_shuffles()
+        except Exception:
+            pass
 
 
 async def _prune_loop():
@@ -280,7 +290,7 @@ async def _serve_ui(ws, code, user_id, is_admin=False):
             else:
                 await hub.dispatch(code, eff, msg.get("item"))
         elif mtype in (P.ADMIN_SET_COOLDOWN, P.ADMIN_REMOVE_PLAYER,
-                       P.ADMIN_SET_DISCOVERED, P.ADMIN_SET_OWNER):
+                       P.ADMIN_SET_DISCOVERED, P.ADMIN_SET_OWNER, P.ADMIN_SET_MODE):
             if not (is_admin or user_id == hub.rooms[code].host):
                 await ws.send_json({"type": P.REJECT, "reason": "host only"})
                 continue
@@ -295,6 +305,8 @@ async def _serve_ui(ws, code, user_id, is_admin=False):
                 pid = msg.get("player_id")
                 await hub.admin_set_owner(
                     code, int(pid) if pid is not None else None, msg.get("item"))
+            elif mtype == P.ADMIN_SET_MODE:
+                await hub.admin_set_mode(code, msg.get("mode", "normal"), msg.get("seconds"))
 
 
 # ── static UI ──────────────────────────────────────────────────────────────

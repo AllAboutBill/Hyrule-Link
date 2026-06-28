@@ -81,6 +81,8 @@
         </div>
       </div>
 
+      <div id="mode-banner" class="card mode-banner hidden"></div>
+
       <div id="admin" class="card admin hidden">
         <h3>★ Host controls</h3>
         <div class="admin-row">
@@ -89,6 +91,22 @@
           </label>
           <button id="admin-cooldown-apply" class="small">Apply</button>
         </div>
+        <div class="admin-row">
+          <label>Game mode
+            <select id="admin-mode">
+              <option value="normal">Normal (claim)</option>
+              <option value="hot_potato">🔥 Hot Potato</option>
+              <option value="chaos">🌀 Chaos</option>
+            </select>
+          </label>
+          <label>shuffle every
+            <input id="admin-shuffle" type="number" min="5" step="5" style="width:5em" /> s
+          </label>
+          <button id="admin-mode-apply" class="small">Apply</button>
+        </div>
+        <p class="muted">🔥 <strong>Hot Potato</strong>: each found item auto-passes to the next
+          online finder after the timer. 🌀 <strong>Chaos</strong>: every found item randomly
+          reshuffles on the timer. Claiming is disabled in both.</p>
         <div class="admin-players">
           <strong>Players</strong>
           <ul id="admin-player-list"></ul>

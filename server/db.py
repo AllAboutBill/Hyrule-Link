@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS rooms (
     pub_id          TEXT,               -- public watch handle (safe to list)
     host_player_id  INTEGER,
     cooldown_s      REAL NOT NULL DEFAULT 5,
+    mode            TEXT NOT NULL DEFAULT 'normal',  -- normal | hot_potato | chaos
+    shuffle_s       REAL NOT NULL DEFAULT 120,       -- shuffle-mode interval (seconds)
     created_at      REAL NOT NULL,
     last_active     REAL
 );
@@ -82,6 +84,11 @@ def init():
         for row in _conn.execute("SELECT code FROM rooms WHERE pub_id IS NULL").fetchall():
             _conn.execute("UPDATE rooms SET pub_id=? WHERE code=?",
                           (secrets.token_urlsafe(9), row[0]))
+        # migrate older DBs: game-mode columns
+        if "mode" not in cols:
+            _conn.execute("ALTER TABLE rooms ADD COLUMN mode TEXT NOT NULL DEFAULT 'normal'")
+        if "shuffle_s" not in cols:
+            _conn.execute("ALTER TABLE rooms ADD COLUMN shuffle_s REAL NOT NULL DEFAULT 120")
         # migrate older DBs: per-player discovered tier (defaults legacy rows to 1)
         disc_cols = [r[1] for r in _conn.execute("PRAGMA table_info(discovered)").fetchall()]
         if "level" not in disc_cols:
@@ -161,6 +168,10 @@ def set_host(code: str, player_id: int):
 
 def update_cooldown(code: str, seconds: float):
     _q("UPDATE rooms SET cooldown_s=? WHERE code=?", (seconds, code))
+
+
+def update_mode(code: str, mode: str, shuffle_s: float):
+    _q("UPDATE rooms SET mode=?, shuffle_s=? WHERE code=?", (mode, shuffle_s, code))
 
 
 # ── players ──────────────────────────────────────────────────────────────

@@ -21,8 +21,17 @@ const state = {
   adminKey: localStorage.getItem("hl_admin") || "",
   adminEnabled: false,
   rooms: [],         // last fetched live-rooms list
+  mode: "normal",    // normal | hot_potato | chaos
+  shuffle_s: 120,
+  shuffle_remaining: 0,
   cooldownTimer: null,
   roomsTimer: null,
+};
+
+const MODE_LABELS = { normal: "Normal", hot_potato: "🔥 Hot Potato", chaos: "🌀 Chaos" };
+const fmtClock = (s) => {
+  s = Math.max(0, Math.round(s));
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
 };
 
 // Either the room's host OR a confirmed global admin gets management controls.
@@ -240,6 +249,10 @@ function handleMsg(msg) {
     state.spectator = !!msg.spectator;
     state.players = msg.players || [];
     state.cooldown_s = msg.cooldown_s;
+    state.mode = msg.mode || "normal";
+    state.shuffle_s = msg.shuffle_s || 120;
+    state.shuffle_remaining = msg.shuffle_remaining || 0;
+    renderModeBanner();
     $("whoami").textContent = state.spectator
       ? `watching · ${state.room.name || "a room"}`
       : (state.admin ? `admin · ${state.room.name || "a room"}` : $("whoami").textContent);
@@ -290,12 +303,27 @@ function renderGrid() {
   });
 }
 
+function renderModeBanner() {
+  const b = $("mode-banner");
+  if (!b) return;
+  if (!state.room || state.mode === "normal") { b.classList.add("hidden"); return; }
+  b.classList.remove("hidden");
+  b.classList.toggle("chaos", state.mode === "chaos");
+  b.innerHTML = state.mode === "chaos"
+    ? `🌀 <strong>Chaos</strong> — every found item reshuffles each ${fmtClock(state.shuffle_s)} · next in <strong>${fmtClock(state.shuffle_remaining)}</strong>`
+    : `🔥 <strong>Hot Potato</strong> — each item passes to the next online finder every ${fmtClock(state.shuffle_s)}. No claiming.`;
+}
+
 function renderAdmin() {
   const panel = $("admin");
   if (!isAdmin()) { panel.classList.add("hidden"); return; }
   panel.classList.remove("hidden");
   const cd = $("admin-cooldown");
   if (document.activeElement !== cd) cd.value = Math.round(state.cooldown_s ?? 0);
+  const ms = $("admin-mode");
+  if (ms && document.activeElement !== ms) ms.value = state.mode;
+  const sh = $("admin-shuffle");
+  if (sh && document.activeElement !== sh) sh.value = Math.round(state.shuffle_s || 120);
   $("admin-player-list").innerHTML = state.players.map((p) => {
     const tag = p.id === state.host
       ? '<span class="muted">host</span>'
@@ -353,10 +381,13 @@ function cardHtml(cat, e) {
   const cd = e.cooldown_remaining;
   const onCooldown = cd > 0.05;
   const cls = mine ? "mine" : (e.owner ? "owned" : "unowned");
-  const canPlay = !state.spectator && state.you != null;  // real player (not watcher/admin)
+  // claiming only in Normal mode for a real player (not watcher/admin/shuffle mode)
+  const canPlay = !state.spectator && state.you != null && state.mode === "normal";
   let action = "";
-  if (!canPlay) {
-    action = "";                                 // watcher / admin: read-only board
+  if (mine && state.mode !== "normal") {
+    action = `<div class="held">✓ yours</div>`;
+  } else if (!canPlay) {
+    action = "";                                 // watcher / admin / shuffle mode: read-only
   } else if (mine) {
     action = `<div class="held">✓ you hold this</div>`;
   } else if (!discovered) {
@@ -366,12 +397,14 @@ function cardHtml(cat, e) {
   } else {
     action = `<button data-claim="${cat.key}">Claim</button>`;
   }
+  const holdTimer = (state.mode === "hot_potato" && e.owner && e.hold_remaining != null)
+    ? `<div class="item-sub hold">⏱ ${fmtClock(e.hold_remaining)}</div>` : "";
   const owner = e.owner ? escapeHtml(e.owner_name || "?") : "unowned";
   const tier = e.tier && e.tier !== "—" ? ` <span class="tier">${escapeHtml(e.tier)}</span>` : "";
   return `<div class="item ${cls}">
     <div class="item-head">${iconHtml(cat, e)}<div class="item-name">${escapeHtml(cat.name)}${tier}</div></div>
     <div class="item-sub">held by <strong>${owner}</strong></div>
-    ${action}
+    ${action}${holdTimer}
     ${chips}
   </div>`;
 }
@@ -391,6 +424,14 @@ function startCooldownTick() {
         e.cooldown_remaining = Math.max(0, e.cooldown_remaining - 1);
         dirty = true;
       }
+      if (e.hold_remaining != null && e.hold_remaining > 0) {
+        e.hold_remaining = Math.max(0, e.hold_remaining - 1);
+        dirty = true;
+      }
+    }
+    if (state.mode === "chaos" && state.shuffle_remaining > 0) {
+      state.shuffle_remaining = Math.max(0, state.shuffle_remaining - 1);
+      renderModeBanner();
     }
     if (dirty && state.room) renderGrid();
   }, 1000);
@@ -417,6 +458,9 @@ $("btn-connect-game").onclick = () => $("agent-help").classList.toggle("hidden")
 $("rooms-refresh").onclick = loadRooms;
 $("admin-cooldown-apply").onclick = () =>
   sendWS({ type: "admin_set_cooldown", seconds: Number($("admin-cooldown").value) || 0 });
+$("admin-mode-apply").onclick = () =>
+  sendWS({ type: "admin_set_mode", mode: $("admin-mode").value,
+           seconds: Number($("admin-shuffle").value) || 120 });
 $("admin-key").addEventListener("input", (e) => {
   state.adminKey = e.target.value.trim();
   localStorage.setItem("hl_admin", state.adminKey);

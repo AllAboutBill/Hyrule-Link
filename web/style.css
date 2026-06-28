@@ -133,6 +133,23 @@ button.danger:hover { border-color: var(--danger); box-shadow: 0 0 18px rgba(255
 .admin-unlock label { display: flex; align-items: center; gap: .5rem; margin: 0; }
 .admin-unlock input { width: auto; flex: 1; max-width: 320px; margin: 0; }
 
+/* ── game-mode banner ───────────────────────────────────────────────────── */
+.mode-banner {
+  margin: 0 0 1rem; padding: .7rem 1.1rem;
+  font-family: "Unbounded", sans-serif; font-weight: 700; letter-spacing: -0.01em;
+  font-size: .95rem; color: var(--gold);
+  border: 1px solid rgba(255, 215, 0, 0.45); border-radius: 14px;
+  background: rgba(255, 215, 0, 0.05); box-shadow: 0 0 24px rgba(255, 215, 0, 0.12);
+}
+.mode-banner.chaos {
+  color: var(--accent2); border-color: rgba(138, 107, 255, 0.6);
+  background: rgba(138, 107, 255, 0.07); box-shadow: 0 0 26px rgba(138, 107, 255, 0.2);
+}
+.mode-banner strong { color: #fff; }
+.item-sub.hold { color: var(--gold); font-weight: 700; }
+#admin-mode { font: inherit; padding: .3rem .5rem; border-radius: 8px;
+  background: var(--card-solid); color: var(--ink); border: 1px solid var(--border); }
+
 /* ── room header ────────────────────────────────────────────────────────── */
 .room-head { display: flex; justify-content: space-between; align-items: center; }
 .room-head h2 { color: var(--gold); text-shadow: 0 0 16px rgba(255,215,0,0.22); }

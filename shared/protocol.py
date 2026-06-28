@@ -44,6 +44,7 @@ ADMIN_SET_COOLDOWN = "admin_set_cooldown"     # {seconds}
 ADMIN_REMOVE_PLAYER = "admin_remove_player"   # {player_id}
 ADMIN_SET_DISCOVERED = "admin_set_discovered" # {player_id, item, found}
 ADMIN_SET_OWNER = "admin_set_owner"           # {player_id|null, item}
+ADMIN_SET_MODE = "admin_set_mode"             # {mode: normal|hot_potato|chaos, seconds}
 
 # server -> agent
 GRANT = "grant"

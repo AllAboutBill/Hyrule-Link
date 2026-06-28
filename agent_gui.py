@@ -710,8 +710,13 @@ class App(tk.Tk):
         self.host_bar = tk.Frame(f, bg=BG)
         self._build_host_bar()
 
+        # game-mode banner (shown to everyone when a shuffle mode is active)
+        self.mode_banner = tk.Label(f, text="", bg=PANEL, fg=GOLD, anchor="w",
+                                    font=(self.logo_font, 11, "bold"), padx=10, pady=6)
+
         # the board (responsive grid: fills width, reflows columns to stay wide)
-        board_wrap = tk.Frame(f, bg=BG); board_wrap.pack(fill="both", expand=True)
+        self.board_wrap = tk.Frame(f, bg=BG); self.board_wrap.pack(fill="both", expand=True)
+        board_wrap = self.board_wrap
         self.canvas = tk.Canvas(board_wrap, bg=BG, highlightthickness=0)
         sb = ttk.Scrollbar(board_wrap, orient="vertical", command=self.canvas.yview)
         self.board = tk.Frame(self.canvas, bg=BG)
@@ -740,7 +745,17 @@ class App(tk.Tk):
         self.e_cd = self._entry(self.host_bar)
         self.e_cd.configure(width=4); self.e_cd.pack(side="left")
         self._button(self.host_bar, "set", self._set_cooldown, small=True).pack(side="left", padx=4)
-        tk.Label(self.host_bar, text="· click a player to remove · right-click an item to manage found/owner",
+        # game mode controls
+        tk.Label(self.host_bar, text="· mode", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(10, 2))
+        self.mode_var = tk.StringVar(value="normal")
+        ttk.Combobox(self.host_bar, textvariable=self.mode_var, state="readonly", width=11,
+                     values=["normal", "hot_potato", "chaos"]).pack(side="left")
+        tk.Label(self.host_bar, text="every", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(6, 2))
+        self.e_shuffle = self._entry(self.host_bar)
+        self.e_shuffle.configure(width=4); self.e_shuffle.pack(side="left")
+        tk.Label(self.host_bar, text="s", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left")
+        self._button(self.host_bar, "go", self._set_mode, small=True).pack(side="left", padx=4)
+        tk.Label(self.host_bar, text="· click player=remove · right-click item=manage",
                  fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=8)
 
     def _is_host(self):
@@ -751,6 +766,37 @@ class App(tk.Tk):
             self._ui_send({"type": "admin_set_cooldown", "seconds": float(self.e_cd.get())})
         except ValueError:
             pass
+
+    def _set_mode(self):
+        try:
+            secs = float(self.e_shuffle.get() or 120)
+        except ValueError:
+            secs = 120
+        self._ui_send({"type": "admin_set_mode", "mode": self.mode_var.get(), "seconds": secs})
+
+    @staticmethod
+    def _clock(s):
+        s = max(0, int(round(s)))
+        return f"{s // 60}:{s % 60:02d}"
+
+    def _update_mode_banner(self):
+        if not hasattr(self, "mode_banner"):
+            return
+        mode = (self.state or {}).get("mode", "normal")
+        if not self.state or mode == "normal":
+            self.mode_banner.pack_forget()
+            return
+        every = self._clock(self.state.get("shuffle_s", 120))
+        if mode == "chaos":
+            rem = self._clock(self.state.get("shuffle_remaining", 0))
+            self.mode_banner.config(
+                text=f"🌀 Chaos — everything reshuffles every {every} · next in {rem}",
+                fg=ACCENT2, highlightbackground=ACCENT2)
+        else:
+            self.mode_banner.config(
+                text=f"🔥 Hot Potato — each item passes to the next online finder every {every}. No claiming.",
+                fg=GOLD, highlightbackground=GOLD)
+        self.mode_banner.pack(fill="x", pady=(0, 6), before=self.board_wrap)
 
     # ── board rendering ─────────────────────────────────────────────────────
     def _render_players(self):
@@ -846,11 +892,15 @@ class App(tk.Tk):
             w.destroy()
         self._render_players()
         if self._is_host():
-            self.host_bar.pack(fill="x", pady=(0, 6), before=self.canvas.master)
+            self.host_bar.pack(fill="x", pady=(0, 6), before=self.board_wrap)
             if not self.e_cd.get():
                 self.e_cd.insert(0, str(int(self.state.get("cooldown_s", 5))))
+            self.mode_var.set(self.state.get("mode", "normal"))
+            if not self.e_shuffle.get():
+                self.e_shuffle.insert(0, str(int(self.state.get("shuffle_s", 120))))
         else:
             self.host_bar.pack_forget()
+        self._update_mode_banner()
 
         ledger = self.state.get("ledger", {})
         cols = self._board_columns()
@@ -914,9 +964,20 @@ class App(tk.Tk):
         tk.Label(card, text=sub, fg=MUTED, bg=PANEL, font=("Segoe UI", 8),
                  wraplength=CARD_MIN_PX, justify="center").pack(fill="x", padx=3)
 
+        mode = self.state.get("mode", "normal")
         action = tk.Frame(card, bg=PANEL); action.pack(pady=(1, 4))
         if not e:
             tk.Label(action, text="—", fg=MUTED, bg=PANEL, font=("Segoe UI", 8)).pack()
+        elif mode != "normal":
+            # shuffle modes: no claiming — show ownership + hot-potato hold timer
+            if mine:
+                tk.Label(action, text="✓ yours", fg=GREEN, bg=PANEL,
+                         font=("Segoe UI Semibold", 9)).pack()
+            if mode == "hot_potato" and e.get("owner") and e.get("hold_remaining") is not None:
+                tk.Label(action, text=f"⏱ {self._clock(e['hold_remaining'])}", fg=GOLD, bg=PANEL,
+                         font=("Segoe UI", 8)).pack()
+            elif not mine:
+                tk.Label(action, text="—", fg=MUTED, bg=PANEL, font=("Segoe UI", 8)).pack()
         elif mine:
             tk.Label(action, text="✓ you hold this", fg=GREEN, bg=PANEL,
                      font=("Segoe UI Semibold", 9)).pack()
@@ -1299,11 +1360,16 @@ class App(tk.Tk):
         else:
             self._dot(self.dot_emu, "#555"); self._dot(self.dot_srv, "#555")
             self.lbl_emu.config(text="emulator: —"); self.lbl_srv.config(text="server: —")
-        # live cooldown countdown between server pushes
+        # live countdowns between server pushes (cooldown, hot-potato hold, chaos timer)
         if self.state:
             for v in self.state.get("ledger", {}).values():
                 if v.get("cooldown_remaining", 0) > 0:
                     v["cooldown_remaining"] = max(0, v["cooldown_remaining"] - 0.8)
+                if v.get("hold_remaining", 0) > 0:
+                    v["hold_remaining"] = max(0, v["hold_remaining"] - 0.8)
+            if self.state.get("mode") == "chaos" and self.state.get("shuffle_remaining", 0) > 0:
+                self.state["shuffle_remaining"] = max(0, self.state["shuffle_remaining"] - 0.8)
+                self._update_mode_banner()
         self.after(800, self._tick)
 
     def _on_close(self):

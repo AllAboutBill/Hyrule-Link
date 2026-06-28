@@ -16,6 +16,7 @@ Rules (locked with the user):
     item back and forth.
 """
 
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Dict, Optional, List, Tuple
@@ -24,6 +25,14 @@ from shared.items import BY_KEY, tier_label, item_image
 from shared import protocol as P
 from server import db
 
+# Game modes. "normal" = claim/find as usual. The shuffle modes auto-rotate
+# ownership and disable manual claiming.
+MODE_NORMAL = "normal"
+MODE_HOT_POTATO = "hot_potato"   # each held item passes to the next finder after N s
+MODE_CHAOS = "chaos"             # ALL found items randomly reassigned every N s
+MODES = (MODE_NORMAL, MODE_HOT_POTATO, MODE_CHAOS)
+MODE_LABELS = {MODE_NORMAL: "Normal", MODE_HOT_POTATO: "Hot Potato", MODE_CHAOS: "Chaos"}
+
 
 # ── pure state ────────────────────────────────────────────────────────────
 @dataclass
@@ -31,6 +40,7 @@ class ItemState:
     owner: Optional[int] = None          # user_id or None (unowned)
     level: int = 0                        # tier currently granted to the owner
     cooldown_until: float = 0.0
+    held_since: float = 0.0               # when the current owner got it (hot potato)
     # user_id -> the highest tier THAT player has personally found. Membership
     # (the keys) is "has discovered it"; the value is that player's own tier.
     discovered: Dict[int, int] = field(default_factory=dict)
@@ -43,6 +53,9 @@ class RoomState:
     pub_id: str = ""        # public watch handle (safe to broadcast; code is not)
     cooldown_s: float = 5.0
     host: int = 0  # host_user_id (room creator / admin)
+    mode: str = MODE_NORMAL
+    shuffle_s: float = 120.0   # rotation interval for the shuffle modes (seconds)
+    last_shuffle: float = 0.0  # last chaos reshuffle time
     items: Dict[str, ItemState] = field(default_factory=dict)
     names: Dict[int, str] = field(default_factory=dict)  # user_id -> display name
     # connectivity per player: user_id -> {"agent": bool, "emu": bool}
@@ -79,6 +92,7 @@ def resolve_pickup(room: RoomState, user_id: int, key: str, level: int) -> Effec
     it.owner = user_id
     it.level = personal
     it.cooldown_until = now + room.cooldown_s
+    it.held_since = now           # (re)start the hot-potato timer for this item
 
     eff = Effects(changed=True)
     eff.grants.append((user_id, key, personal))
@@ -97,6 +111,9 @@ def resolve_claim(room: RoomState, user_id: int, key: str) -> Effects:
     item = BY_KEY.get(key)
     if item is None:
         return Effects(reject=f"unknown item {key}")
+    if room.mode != MODE_NORMAL:
+        return Effects(reject=f"{MODE_LABELS.get(room.mode, 'This')} mode moves items "
+                              f"automatically — no claiming.")
     it = room.items.get(key)
     name = room.names.get(user_id, f"player {user_id}")
     if it is None or user_id not in it.discovered:
@@ -113,6 +130,7 @@ def resolve_claim(room: RoomState, user_id: int, key: str) -> Effects:
     # Claiming gives YOU back your own tier, not whatever the last holder had.
     it.level = it.discovered.get(user_id, item.present)
     it.cooldown_until = now + room.cooldown_s
+    it.held_since = now
 
     eff = Effects(changed=True)
     eff.grants.append((user_id, key, it.level))
@@ -139,9 +157,13 @@ class RoomHub:
         row = db.get_room(code)
         if not row:
             return None
+        keys = row.keys()
         room = RoomState(code=code, name=row["name"], pub_id=(row["pub_id"] or ""),
                          cooldown_s=float(row["cooldown_s"]),
-                         host=int(row["host_player_id"] or 0))
+                         host=int(row["host_player_id"] or 0),
+                         mode=(row["mode"] if "mode" in keys and row["mode"] else MODE_NORMAL),
+                         shuffle_s=float(row["shuffle_s"]) if "shuffle_s" in keys and row["shuffle_s"] else 120.0,
+                         last_shuffle=time.time())
         for p in db.room_players(code):
             room.names[p["id"]] = p["display_name"]
         ledger_rows, disc_rows = db.load_ledger(code)
@@ -157,9 +179,11 @@ class RoomHub:
         # The current owner provably found at least the tier they're holding, so
         # make sure their personal record reflects it (covers legacy rows that
         # predate per-player levels and default to 1).
+        now = time.time()
         for it in room.items.values():
             if it.owner is not None:
                 it.discovered[it.owner] = max(it.discovered.get(it.owner, 0), it.level)
+            it.held_since = now      # restart hot-potato timers from load
         self.rooms[code] = room
         self.agents.setdefault(code, {})
         self.uis.setdefault(code, {})
@@ -253,7 +277,7 @@ class RoomHub:
             # so don't surface the last holder's level/tier until someone claims.
             owned = it.owner is not None
             level = it.level if owned else 0
-            ledger[key] = {
+            entry = {
                 "name": item.name,
                 "owner": it.owner,
                 "owner_name": room.names.get(it.owner) if it.owner else None,
@@ -263,12 +287,19 @@ class RoomHub:
                 "discovered": sorted(it.discovered),
                 "cooldown_remaining": max(0.0, it.cooldown_until - now),
             }
+            if room.mode == MODE_HOT_POTATO and owned:
+                entry["hold_remaining"] = max(0.0, it.held_since + room.shuffle_s - now)
+            ledger[key] = entry
         return {
             "type": P.STATE,
             "room": room.pub_id,      # public handle only — never leak the join code
             "name": room.name,
             "cooldown_s": room.cooldown_s,
             "host": room.host,
+            "mode": room.mode,
+            "shuffle_s": room.shuffle_s,
+            "shuffle_remaining": (max(0.0, room.last_shuffle + room.shuffle_s - now)
+                                  if room.mode == MODE_CHAOS else 0.0),
             "players": [
                 {"id": uid, "name": nm,
                  "agent": room.status.get(uid, {}).get("agent", False),
@@ -372,6 +403,7 @@ class RoomHub:
             it.discovered.setdefault(player_id, item.present)  # owning implies discovered
             it.owner = player_id
             it.level = it.discovered[player_id]   # grant their own tier
+            it.held_since = time.time()
             ws = self.agents.get(code, {}).get(player_id)
             if ws:
                 await self._send(ws, {"type": P.GRANT, "item": key, "level": it.level})
@@ -383,6 +415,123 @@ class RoomHub:
                 await self._send(ws, {"type": P.REVOKE, "item": key})
         self._persist(room, key)
         await self.broadcast_state(code)
+
+    # ── game modes: auto-shuffle engine ──────────────────────────────────────
+    async def admin_set_mode(self, code: str, mode: str, seconds=None):
+        room = self.rooms.get(code)
+        if room is None:
+            return
+        room.mode = mode if mode in MODES else MODE_NORMAL
+        if seconds:
+            try:
+                room.shuffle_s = max(5.0, float(seconds))
+            except (TypeError, ValueError):
+                pass
+        now = time.time()
+        room.last_shuffle = now
+        for it in room.items.values():        # everyone keeps their item a full round first
+            it.held_since = now
+        db.update_mode(code, room.mode, room.shuffle_s)
+        if room.mode == MODE_NORMAL:
+            await self.broadcast_event(code, "Host set mode to Normal — claiming is back on.")
+        else:
+            await self.broadcast_event(
+                code, f"Host started {MODE_LABELS[room.mode]} — items shuffle every "
+                      f"{int(room.shuffle_s)}s. Claiming is off.")
+        await self.broadcast_state(code)
+
+    def _available_finders(self, room: RoomState, it: ItemState) -> List[int]:
+        """Discoverers who can actually receive the item right now (agent online),
+        in stable id order so hot-potato rotation is a predictable round-robin."""
+        return [uid for uid in sorted(it.discovered)
+                if uid in room.names and room.status.get(uid, {}).get("agent")]
+
+    def _reassign(self, room: RoomState, key: str, new_owner: int, now: float, grants, revokes):
+        it = room.items[key]
+        prev = it.owner
+        it.owner = new_owner
+        it.level = it.discovered.get(new_owner, BY_KEY[key].present)
+        it.held_since = now
+        grants.append((new_owner, key, it.level))
+        if prev is not None and prev != new_owner:
+            revokes.append((prev, key))
+        self._persist(room, key)
+
+    async def tick_shuffles(self):
+        """Driven once a second by the server; rotates items in any room whose
+        mode is active and whose timer is due."""
+        now = time.time()
+        for code in list(self.rooms.keys()):
+            room = self.rooms.get(code)
+            if room is None or room.mode == MODE_NORMAL:
+                continue
+            try:
+                if room.mode == MODE_HOT_POTATO:
+                    await self._tick_hot_potato(code, room, now)
+                elif room.mode == MODE_CHAOS:
+                    await self._tick_chaos(code, room, now)
+            except Exception:
+                pass
+
+    async def _tick_hot_potato(self, code, room, now):
+        grants, revokes, events = [], [], []
+        for key, it in room.items.items():
+            if not it.discovered:
+                continue
+            avail = self._available_finders(room, it)
+            if not avail:
+                continue
+            if it.owner is None:                      # pull a found-but-unheld item in
+                new = avail[0]
+            else:
+                if now - it.held_since < room.shuffle_s:
+                    continue                          # still their turn
+                if it.owner in avail:
+                    if len(avail) == 1:               # only the holder is online → keep
+                        it.held_since = now
+                        continue
+                    new = avail[(avail.index(it.owner) + 1) % len(avail)]
+                else:
+                    new = avail[0]                    # holder went offline → hand it on
+            if new == it.owner:
+                it.held_since = now
+                continue
+            self._reassign(room, key, new, now, grants, revokes)
+            events.append(f"🔥 {BY_KEY[key].name} → {room.names.get(new, 'someone')}")
+        if grants or revokes:
+            await self._send_commands(code, grants, revokes)
+            for ev in events:
+                await self.broadcast_event(code, ev)
+            await self.broadcast_state(code)
+
+    async def _tick_chaos(self, code, room, now):
+        if now - room.last_shuffle < room.shuffle_s:
+            return
+        room.last_shuffle = now
+        grants, revokes = [], []
+        for key, it in room.items.items():
+            avail = self._available_finders(room, it)
+            if not avail:
+                continue
+            new = random.choice(avail)
+            if new == it.owner:
+                continue
+            self._reassign(room, key, new, now, grants, revokes)
+        if grants or revokes:
+            await self._send_commands(code, grants, revokes)
+            await self.broadcast_event(code, "🌀 Chaos shuffle! Everything moved.")
+            await self.broadcast_state(code)
+
+    async def _send_commands(self, code, grants, revokes):
+        db.touch_room(code)
+        for (uid, key, level) in grants:
+            ws = self.agents.get(code, {}).get(uid)
+            if ws:
+                await self._send(ws, {"type": P.GRANT, "item": key, "level": level})
+        for (uid, key) in revokes:
+            ws = self.agents.get(code, {}).get(uid)
+            if ws:
+                await self._send(ws, {"type": P.REVOKE, "item": key})
 
     async def drop_room(self, code: str):
         """Tear a room down: close every live connection and forget it in memory

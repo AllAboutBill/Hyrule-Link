@@ -131,6 +131,12 @@ duplicate.
   set the steal **cooldown**, **remove** a player, and **right-click any item**
   (app) / use the **player chips** (web) to fix who has *found* an item or who
   *owns* it — handy after a disconnect.
+- **Game modes** (host-set, shown to everyone with a banner; claiming is off):
+  - 🔥 **Hot Potato** — each item you're holding auto-passes to the next *online*
+    player who's found it after a timer (round-robin). You can't keep anything.
+  - 🌀 **Chaos** — every found item is randomly reassigned among its online
+    finders on a shared timer.
+  - **Normal** — the usual find/claim/steal game.
 - **Global admin (you).** Set `HYRULELINK_ADMIN_KEY` in the server's environment.
   On the web home page an **Admin key** box appears; enter the key to **delete any
   room** and to **manage / kick** in *any* room (not just ones you host). With no
