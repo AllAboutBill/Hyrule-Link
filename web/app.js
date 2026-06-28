@@ -19,6 +19,7 @@ const state = {
   spectator: false,  // read-only watcher (no player)
   admin: false,      // server confirmed admin for THIS room (via Discord session)
   me: { logged_in: false, admin: false, login_enabled: false },  // /api/me
+  nameEdited: false, // true once you type your own name (don't override it)
   rooms: [],         // last fetched live-rooms list
   mode: "normal",    // normal | hot_potato | chaos
   shuffle_s: 120,
@@ -48,7 +49,12 @@ async function api(path, body) {
   return data;
 }
 
-const entryName = () => ($("entry-name").value || "").trim() || "Spectator";
+// what you typed, else your Discord name (when logged in), else a neutral default
+const entryName = () => (
+  ($("entry-name").value || "").trim()
+  || (state.me && state.me.logged_in && state.me.name)
+  || "Spectator"
+);
 
 async function createRoom() {
   $("entry-err").textContent = "";
@@ -97,11 +103,13 @@ async function loadMe() {
   try {
     state.me = await api("/api/me");
   } catch (e) { state.me = { logged_in: false, admin: false, login_enabled: false }; }
-  // auto-fill the name field from your Discord name (unless you've set one)
+  // Default the name to your Discord name when logged in. Override even a stale
+  // saved value ("Spectator"/"Player"/old name), but never what you've typed.
   const nameInput = $("entry-name");
-  if (state.me.logged_in && state.me.name && nameInput && !nameInput.value.trim()) {
+  if (state.me.logged_in && state.me.name && nameInput && !state.nameEdited) {
     nameInput.value = state.me.name;
     state.name = state.me.name;
+    localStorage.setItem("hl_name", state.me.name);
   }
   renderAuth();
   renderRoomsList();
@@ -527,7 +535,13 @@ $("admin-cooldown-apply").onclick = () =>
 $("admin-mode-apply").onclick = () =>
   sendWS({ type: "admin_set_mode", mode: $("admin-mode").value,
            seconds: Number($("admin-shuffle").value) || 120 });
+$("entry-name").addEventListener("input", () => {
+  state.nameEdited = true;                      // you typed your own — keep it
+  state.name = $("entry-name").value.trim();
+  localStorage.setItem("hl_name", state.name);
+});
 
+// pre-fill from your last name; loadMe() upgrades this to your Discord name
 if ($("entry-name") && state.name) $("entry-name").value = state.name;
 startCooldownTick();
 showHome();
