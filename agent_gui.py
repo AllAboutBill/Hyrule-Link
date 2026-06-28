@@ -27,10 +27,10 @@ from tkinter import ttk, messagebox, filedialog
 
 import websocket  # websocket-client
 
-try:                                  # optional: item sprites in the board
-    from PIL import Image, ImageTk, ImageOps
+try:                                  # optional: item sprites + Discord avatars
+    from PIL import Image, ImageTk, ImageOps, ImageDraw
 except Exception:                     # app still runs without icons
-    Image = ImageTk = ImageOps = None
+    Image = ImageTk = ImageOps = ImageDraw = None
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -245,6 +245,8 @@ class App(tk.Tk):
         self._fields = []
         self._closing = False
         self._icon_cache = {}       # (filename, dim) -> PhotoImage (kept alive here)
+        self._avatar_cache = {}     # (url, size) -> PhotoImage | None (loading) | False (failed)
+        self._avatar_q = queue.Queue()   # worker threads -> UI thread (PIL images)
         self._manage_win = None     # host's per-item found/owner popup (if open)
 
         self._build_chrome()
@@ -430,6 +432,40 @@ class App(tk.Tk):
         photo = ImageTk.PhotoImage(img)
         self._icon_cache[ckey] = photo
         return photo
+
+    # ── Discord avatars (downloaded async, round-masked, cached) ──────────────
+    # Worker threads only download + PIL-process; the PhotoImage is created on the
+    # UI thread in _tick (Tk isn't thread-safe), matching the rest of the app.
+    def _avatar_image(self, url, size=18):
+        """Round avatar PhotoImage for `url`, or None until it's fetched."""
+        if Image is None or not url:
+            return None
+        key = (url, size)
+        if key in self._avatar_cache:          # PhotoImage (done) / None (loading) / False (failed)
+            v = self._avatar_cache[key]
+            return v if v not in (None, False) else None
+        self._avatar_cache[key] = None         # mark in-flight (no duplicate fetch)
+        threading.Thread(target=self._fetch_avatar, args=(url, size, key), daemon=True).start()
+        return None
+
+    def _fetch_avatar(self, url, size, key):
+        import io
+        try:
+            with urllib.request.urlopen(url, timeout=8) as r:
+                raw = r.read()
+            img = Image.open(io.BytesIO(raw)).convert("RGBA").resize((size, size), Image.LANCZOS)
+            mask = Image.new("L", (size, size), 0)
+            ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
+            img.putalpha(mask)
+            self._avatar_q.put((key, img))     # hand the PIL image to the UI thread
+        except Exception:
+            self._avatar_q.put((key, None))
+
+    def _player_avatar_url(self, player_id):
+        for p in (self.state or {}).get("players", []):
+            if p.get("id") == player_id:
+                return p.get("avatar")
+        return None
 
     # ── faked "aurora" pixel-field background (port of web/nexus-bg.js) ───────
     # The site layers a chunky grayscale block grid at opacity .30 / soft-light
@@ -930,6 +966,10 @@ class App(tk.Tk):
             chip = tk.Frame(self.players_row, bg=BG); chip.pack(side="left", padx=(0, 10))
             c = tk.Canvas(chip, width=12, height=12, bg=BG, highlightthickness=0); c.pack(side="left")
             self._dot(c, color)
+            av = self._avatar_image(p.get("avatar"), 18)
+            if av is not None:
+                al = tk.Label(chip, image=av, bg=BG); al.image = av
+                al.pack(side="left", padx=(3, 3))
             star = "★ " if p["id"] == self.state.get("host") else ""
             you = " (you)" if p["id"] == self.state.get("you") else ""
             lbl = tk.Label(chip, text=f"{star}{p['name']}{you}", fg=INK, bg=BG, font=("Segoe UI", 9))
@@ -1082,8 +1122,14 @@ class App(tk.Tk):
             il.pack(pady=(4, 1))
         tk.Label(card, text=cat["name"], fg=INK, bg=PANEL, font=("Segoe UI Semibold", 9),
                  wraplength=CARD_MIN_PX, justify="center").pack(fill="x", padx=3)
-        tk.Label(card, text=sub, fg=MUTED, bg=PANEL, font=("Segoe UI", 8),
-                 wraplength=CARD_MIN_PX, justify="center").pack(fill="x", padx=3)
+        # sub line: owner avatar (if any) + "held by …" / "undiscovered"
+        owner_av = self._avatar_image(self._player_avatar_url(e.get("owner")), 16) if e else None
+        subf = tk.Frame(card, bg=PANEL); subf.pack(fill="x", padx=3)
+        inner = tk.Frame(subf, bg=PANEL); inner.pack()
+        if owner_av is not None:
+            al = tk.Label(inner, image=owner_av, bg=PANEL); al.image = owner_av
+            al.pack(side="left", padx=(0, 3))
+        tk.Label(inner, text=sub, fg=MUTED, bg=PANEL, font=("Segoe UI", 8)).pack(side="left")
 
         mode = self.state.get("mode", "normal")
         action = tk.Frame(card, bg=PANEL); action.pack(pady=(1, 4))
@@ -1420,6 +1466,20 @@ class App(tk.Tk):
                     self.show_start()
             elif st == "expired" and self.room is None and hasattr(self, "err"):
                 self.err.config(text="Login timed out — click Login with Discord again.")
+        # avatar downloads finished by worker threads -> make PhotoImages here
+        av_loaded = False
+        while True:
+            try:
+                key, pil = self._avatar_q.get_nowait()
+            except queue.Empty:
+                break
+            if pil is None:
+                self._avatar_cache[key] = False           # failed — don't retry
+            else:
+                self._avatar_cache[key] = ImageTk.PhotoImage(pil)
+                av_loaded = True
+        if av_loaded and self.room is not None and self.state and hasattr(self, "board"):
+            self._render_board()
         while True:
             try:
                 self._log(self.log_q.get_nowait())
