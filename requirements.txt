@@ -1,0 +1,9 @@
+# Server (coordination hub + web UI)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+
+# Agent (WebSocket client to the server)
+websocket-client>=1.7
+
+# Player app: in-app ALTTPR seed generation
+pyz3r==6.1.0

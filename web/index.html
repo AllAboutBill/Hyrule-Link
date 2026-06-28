@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HyruleLink — shared-inventory co-op for ALTTPR</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;700;900&family=DM+Mono:wght@400;500&display=swap" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <!-- Aurora background (matches billogna.lol): drifting blobs + pixel field + noise -->
+  <div class="background-animation" aria-hidden="true">
+    <div class="floating-gradient gradient-1"></div>
+    <div class="floating-gradient gradient-2"></div>
+    <div class="floating-gradient gradient-3"></div>
+  </div>
+  <canvas id="nexus-pixels" aria-hidden="true"></canvas>
+  <div class="noise" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <nav class="site-nav">
+      <span class="site-logo">HyruleLink</span>
+      <div class="site-links">
+        <span id="whoami" class="muted"></span>
+        <a href="https://billogna.lol">billogna.lol</a>
+      </div>
+    </nav>
+  </header>
+
+  <main class="page">
+    <!-- Entry (no login — just a name + room code) -->
+    <section id="entry" class="card hidden">
+      <h2>Join a game</h2>
+      <p class="muted">This web view is a spectator / second screen. Players should
+        use the HyruleLink app (Play.cmd). No account needed.</p>
+      <input id="entry-name" placeholder="your name" />
+      <div class="lobby-grid">
+        <div>
+          <h3>Join with a code</h3>
+          <input id="entry-code" placeholder="room code" />
+          <button id="btn-join">Join</button>
+        </div>
+        <div>
+          <h3>…or host a new room</h3>
+          <button id="btn-create">Create room</button>
+        </div>
+      </div>
+      <p id="entry-err" class="err"></p>
+    </section>
+
+    <!-- Room -->
+    <section id="room" class="hidden">
+      <div class="room-head card">
+        <div>
+          <h2 id="room-title"></h2>
+          <div class="muted">Room code: <strong id="room-code"></strong> ·
+            <span id="ws-status" class="pill">connecting…</span></div>
+        </div>
+        <div class="room-actions">
+          <button id="btn-connect-game" class="ghost small">Connect your game ▾</button>
+          <button id="btn-leave" class="ghost small">Leave</button>
+        </div>
+      </div>
+
+      <div id="admin" class="card admin hidden">
+        <h3>★ Host controls</h3>
+        <div class="admin-row">
+          <label>Steal cooldown
+            <input id="admin-cooldown" type="number" min="0" step="1" style="width:5em" /> s
+          </label>
+          <button id="admin-cooldown-apply" class="small">Apply</button>
+        </div>
+        <div class="admin-players">
+          <strong>Players</strong>
+          <ul id="admin-player-list"></ul>
+        </div>
+        <p class="muted">On any item below: <strong>click</strong> a player chip to toggle
+          <em>found / un-found</em>; <strong>shift-click</strong> to set or clear the
+          <em>owner</em>. Use this to fix a player's state after a game disconnect.</p>
+      </div>
+
+      <div id="agent-help" class="card hidden">
+        <h3>Connect your emulator</h3>
+        <p class="muted">On the PC running your emulator, set up the agent once:</p>
+        <pre id="agent-cmd"></pre>
+        <p class="muted">It will ask for these — your player token is pre-filled below if you'd rather edit <code>config.json</code> by hand:</p>
+        <pre id="agent-cfg"></pre>
+      </div>
+
+      <div class="room-body">
+        <div id="grid" class="grid"></div>
+        <aside class="card log-card">
+          <h3>Activity</h3>
+          <ul id="log"></ul>
+          <div class="players">
+            <h3>Players</h3>
+            <ul id="players"></ul>
+          </div>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+  <script src="/static/nexus-bg.js"></script>
+  <script src="/static/pixel-canvas.js"></script>
+  <script src="/static/pixel-hover.js"></script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Databases (runtime state)
+*.db
+*.db-wal
+*.db-shm
+
+# Local agent config & secrets (contain player tokens + machine paths)
+agent/config.json
+agent/config_a.json
+agent/config_b.json
+agent/gui_settings.json
+
+# Large vendored binaries (download separately)
+tools/cloudflared.exe
+tools/sni/
+agent/sni/
+
+# ROM seeds (copyrighted; generate locally)
+seeds/
+*.sfc
+*.smc
