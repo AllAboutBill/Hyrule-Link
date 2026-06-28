@@ -403,6 +403,7 @@ function renderAdmin() {
   if (ms && document.activeElement !== ms) ms.value = state.mode;
   const sh = $("admin-shuffle");
   if (sh && document.activeElement !== sh) sh.value = Math.round(state.shuffle_s || 120);
+  updateShuffleVisibility();   // "shuffle every" only applies to the shuffle modes
   $("admin-player-list").innerHTML = state.players.map((p) => {
     const tag = p.id === state.host
       ? '<span class="muted">host</span>'
@@ -546,6 +547,31 @@ $("admin-name-apply").onclick = () => {
 $("admin-mode-apply").onclick = () =>
   sendWS({ type: "admin_set_mode", mode: $("admin-mode").value,
            seconds: Number($("admin-shuffle").value) || 120 });
+
+// Steal cooldown only applies in Normal (you claim/steal there); "shuffle every…"
+// only applies in the shuffle modes. Show each field only where it's used, and
+// update live as the host changes the dropdown.
+function updateShuffleVisibility() {
+  const ms = $("admin-mode");
+  if (!ms) return;
+  const normal = ms.value === "normal";
+  const sh = $("admin-shuffle-wrap"); if (sh) sh.classList.toggle("hidden", normal);
+  const cd = $("admin-cooldown-row"); if (cd) cd.classList.toggle("hidden", !normal);
+}
+$("admin-mode").addEventListener("change", updateShuffleVisibility);
+
+// Collapsible host controls (mirrors the desktop app); remembers your choice.
+function applyHostCollapse() {
+  const collapsed = localStorage.getItem("hl_host_collapsed") === "1";
+  $("admin-body").classList.toggle("hidden", collapsed);
+  $("admin-toggle").textContent = (collapsed ? "▸" : "▾") + " ★ Host controls";
+}
+$("admin-toggle").onclick = () => {
+  const collapsed = localStorage.getItem("hl_host_collapsed") === "1";
+  localStorage.setItem("hl_host_collapsed", collapsed ? "0" : "1");
+  applyHostCollapse();
+};
+applyHostCollapse();
 $("entry-name").addEventListener("input", () => {
   state.nameEdited = true;                      // you typed your own — keep it
   state.name = $("entry-name").value.trim();

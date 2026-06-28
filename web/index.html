@@ -87,14 +87,15 @@
       <div id="mode-banner" class="card mode-banner hidden"></div>
 
       <div id="admin" class="card admin hidden">
-        <h3>★ Host controls</h3>
+        <h3 id="admin-toggle" class="collapser">▾ ★ Host controls</h3>
+        <div id="admin-body">
         <div class="admin-row">
           <label>Room name
             <input id="admin-name" type="text" maxlength="60" style="width:16em" />
           </label>
           <button id="admin-name-apply" class="small">Rename</button>
         </div>
-        <div class="admin-row">
+        <div class="admin-row" id="admin-cooldown-row">
           <label>Steal cooldown
             <input id="admin-cooldown" type="number" min="0" step="1" style="width:5em" /> s
           </label>
@@ -108,7 +109,7 @@
               <option value="chaos">🌀 Chaos</option>
             </select>
           </label>
-          <label>shuffle every
+          <label id="admin-shuffle-wrap" class="hidden">shuffle every
             <input id="admin-shuffle" type="number" min="5" step="5" style="width:5em" /> s
           </label>
           <button id="admin-mode-apply" class="small">Apply</button>
@@ -123,6 +124,7 @@
         <p class="muted">On any item below: <strong>click</strong> a player chip to toggle
           <em>found / un-found</em>; <strong>shift-click</strong> to set or clear the
           <em>owner</em>. Use this to fix a player's state after a game disconnect.</p>
+        </div>
       </div>
 
       <div id="agent-help" class="card hidden">

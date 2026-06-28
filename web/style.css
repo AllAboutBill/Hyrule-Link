@@ -223,6 +223,8 @@ button.danger:hover { border-color: var(--danger); box-shadow: 0 0 18px rgba(255
 /* ── host / admin controls ──────────────────────────────────────────────── */
 .admin { border-color: rgba(255,215,0,0.4); box-shadow: 0 0 24px rgba(255,215,0,0.08), var(--shadow); }
 .admin h3 { color: var(--gold); }
+.collapser { cursor: pointer; user-select: none; }
+.collapser:hover { opacity: .85; }
 .admin-row { display: flex; align-items: center; gap: .6rem; margin: .3rem 0 .8rem; }
 .admin-row label { display: flex; align-items: center; gap: .4rem; }
 .admin-players ul { list-style: none; padding: 0; margin: .3rem 0; }

@@ -9,6 +9,7 @@ an optional spectator/second-screen view).
 
 Run via "Play.cmd", or:  pythonw agent_gui.py
 """
+import copy
 import json
 import os
 import queue
@@ -248,6 +249,8 @@ class App(tk.Tk):
         self._icon_cache = {}       # (filename, dim) -> PhotoImage (kept alive here)
         self._avatar_cache = {}     # (url, size) -> PhotoImage | None (loading) | False (failed)
         self._avatar_q = queue.Queue()   # worker threads -> UI thread (PIL images)
+        self._avatar_version = 0    # bumped when an avatar finishes loading (board sig)
+        self._board_sig = None      # signature of the last board render (skip no-op rebuilds)
         self._manage_win = None     # host's per-item found/owner popup (if open)
 
         self._build_chrome()
@@ -876,6 +879,7 @@ class App(tk.Tk):
                                     font=(self.logo_font, 11, "bold"), padx=10, pady=6)
 
         # the board (responsive grid: fills width, reflows columns to stay wide)
+        self._board_sig = None       # fresh, empty board — force the first render
         self.board_wrap = tk.Frame(f, bg=BG); self.board_wrap.pack(fill="both", expand=True)
         board_wrap = self.board_wrap
         self.canvas = tk.Canvas(board_wrap, bg=BG, highlightthickness=0)
@@ -909,20 +913,46 @@ class App(tk.Tk):
         # the controls themselves live in a frame we can hide
         self.host_ctrls = tk.Frame(self.host_bar, bg=BG)
         c = self.host_ctrls
-        tk.Label(c, text="cooldown", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(2, 2))
-        self.e_cd = self._entry(c); self.e_cd.configure(width=4); self.e_cd.pack(side="left")
-        self._button(c, "set", self._set_cooldown, small=True).pack(side="left", padx=4)
-        tk.Label(c, text="· mode", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(10, 2))
+        # steal cooldown — only meaningful in Normal (you can claim/steal there)
+        self.cd_group = tk.Frame(c, bg=BG)
+        tk.Label(self.cd_group, text="cooldown", fg=MUTED, bg=BG,
+                 font=("Segoe UI", 9)).pack(side="left", padx=(2, 2))
+        self.e_cd = self._entry(self.cd_group); self.e_cd.configure(width=4); self.e_cd.pack(side="left")
+        self._button(self.cd_group, "set", self._set_cooldown, small=True).pack(side="left", padx=4)
+        self.cd_group.pack(side="left")
+        self._mode_label = tk.Label(c, text="· mode", fg=MUTED, bg=BG, font=("Segoe UI", 9))
+        self._mode_label.pack(side="left", padx=(10, 2))
         self.mode_var = tk.StringVar(value="normal")
-        ttk.Combobox(c, textvariable=self.mode_var, state="readonly", width=11,
-                     values=["normal", "hot_potato", "chaos"]).pack(side="left")
-        tk.Label(c, text="every", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(6, 2))
-        self.e_shuffle = self._entry(c); self.e_shuffle.configure(width=4); self.e_shuffle.pack(side="left")
-        tk.Label(c, text="s", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left")
-        self._button(c, "go", self._set_mode, small=True).pack(side="left", padx=4)
+        cb = ttk.Combobox(c, textvariable=self.mode_var, state="readonly", width=11,
+                          values=["normal", "hot_potato", "chaos"])
+        cb.pack(side="left")
+        cb.bind("<<ComboboxSelected>>", lambda e: self._sync_mode_fields())
+        # shuffle interval — only for the shuffle modes (hot potato / chaos)
+        self.shuffle_group = tk.Frame(c, bg=BG)
+        tk.Label(self.shuffle_group, text="every", fg=MUTED, bg=BG,
+                 font=("Segoe UI", 9)).pack(side="left", padx=(6, 2))
+        self.e_shuffle = self._entry(self.shuffle_group); self.e_shuffle.configure(width=4)
+        self.e_shuffle.pack(side="left")
+        tk.Label(self.shuffle_group, text="s", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left")
+        self.shuffle_group.pack(side="left")
+        self._go_btn = self._button(c, "go", self._set_mode, small=True)
+        self._go_btn.pack(side="left", padx=4)
         tk.Label(c, text="· click player=remove · right-click item=manage",
                  fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=8)
+        self._sync_mode_fields()
         self._apply_host_collapse()
+
+    def _sync_mode_fields(self):
+        """Show 'steal cooldown' only in Normal and the 'shuffle every…' fields
+        only in the shuffle modes — they don't both apply at once."""
+        if not hasattr(self, "cd_group"):
+            return
+        if self.mode_var.get() == "normal":
+            self.shuffle_group.pack_forget()
+            self.cd_group.pack(side="left", before=self._mode_label)
+        else:
+            self.cd_group.pack_forget()
+            self.shuffle_group.pack(side="left", before=self._go_btn)
 
     def _toggle_host_controls(self):
         self._host_collapsed = not self._host_collapsed
@@ -1085,7 +1115,37 @@ class App(tk.Tk):
                      "player_id": (None if cur else pid)}),
                 small=True).pack(side="right", padx=6)
 
-    def _render_board(self):
+    def _board_signature(self):
+        """A cheap fingerprint of everything _render_board draws. Lets us skip the
+        full destroy/rebuild when a state push didn't actually change the board —
+        which is what made the app look like it was constantly reloading."""
+        s = self.state or {}
+        you = s.get("you")
+        mode = s.get("mode", "normal")
+        parts = [you, mode, self._is_host(), self._board_columns(),
+                 self._room_title(), self._avatar_version]
+        ledger = s.get("ledger", {})
+        for it in ITEMS:
+            e = ledger.get(it.key)
+            if not e:
+                parts.append((it.key, None))
+            else:
+                parts.append((
+                    it.key, e.get("owner"), e.get("owner_name"), e.get("tier"),
+                    e.get("level"), you in e.get("discovered", []),
+                    round(e.get("cooldown_remaining", 0) or 0),
+                    round(e.get("hold_remaining", 0) or 0) if mode == "hot_potato" else None,
+                ))
+        for p in s.get("players", []):
+            parts.append((p.get("id"), p.get("name"), p.get("agent"),
+                          p.get("emu"), p.get("avatar"), s.get("host")))
+        return tuple(parts)
+
+    def _render_board(self, force=False):
+        sig = self._board_signature()
+        if not force and sig == self._board_sig:
+            return                       # nothing on the board changed — no rebuild
+        self._board_sig = sig
         for w in self.board.winfo_children():
             w.destroy()
         if hasattr(self, "room_title_lbl"):
@@ -1101,6 +1161,7 @@ class App(tk.Tk):
             if not self.e_cd.get():
                 self.e_cd.insert(0, str(int(self.state.get("cooldown_s", 5))))
             self.mode_var.set(self.state.get("mode", "normal"))
+            self._sync_mode_fields()      # show only the fields the mode uses
             if not self.e_shuffle.get():
                 self.e_shuffle.insert(0, str(int(self.state.get("shuffle_s", 120))))
         else:
@@ -1332,7 +1393,7 @@ class App(tk.Tk):
         except Exception:
             pass
         self.agent = None; self.transport = None
-        if hasattr(self, "btn_connect"):
+        if getattr(self, "btn_connect", None) is not None and self.btn_connect.winfo_exists():
             self.btn_connect.config(text="Connect & Play", bg=ACCENT, fg=BG)
         self._log("Emulator unlinked.")
 
@@ -1350,10 +1411,11 @@ class App(tk.Tk):
         self.show_start()
 
     def _log(self, line):
-        if not hasattr(self, "logbox"):
+        box = getattr(self, "logbox", None)
+        if box is None or not box.winfo_exists():   # not on the room screen (or it's gone)
             return
-        self.logbox.configure(state="normal"); self.logbox.insert("end", line + "\n")
-        self.logbox.see("end"); self.logbox.configure(state="disabled")
+        box.configure(state="normal"); box.insert("end", line + "\n")
+        box.see("end"); box.configure(state="disabled")
 
     # ── in-app emulator launch ──────────────────────────────────────────────
     def _emu_type(self, path):
@@ -1522,8 +1584,10 @@ class App(tk.Tk):
             else:
                 self._avatar_cache[key] = ImageTk.PhotoImage(pil)
                 av_loaded = True
-        if av_loaded and self.room is not None and self.state and hasattr(self, "board"):
-            self._render_board()
+        if av_loaded:
+            self._avatar_version += 1     # invalidate the board signature
+            if self.room is not None and self.state and hasattr(self, "board"):
+                self._render_board()
         while True:
             try:
                 self._log(self.log_q.get_nowait())
@@ -1623,7 +1687,10 @@ class App(tk.Tk):
 
     def _on_close(self):
         self._closing = True            # stops the pixel-field animation loop
-        self._stop_all.set(); self._ui_stop.set(); self._disconnect()
+        try:                            # never let cleanup errors block the close
+            self._stop_all.set(); self._ui_stop.set(); self._disconnect()
+        except Exception:
+            pass
         for proc in (self.tunnel_proc, self.local_server, self.sni_proc):
             if proc and proc.poll() is None:
                 try:
