@@ -419,6 +419,16 @@ class RoomHub:
         self._persist(room, key)
         await self.broadcast_state(code)
 
+    async def admin_set_name(self, code: str, name: str):
+        room = self.rooms.get(code)
+        name = (name or "").strip()[:60]
+        if room is None or not name:
+            return
+        room.name = name
+        db.update_name(code, name)
+        await self.broadcast_event(code, f"Room renamed to “{name}”")
+        await self.broadcast_state(code)
+
     # ── game modes: auto-shuffle engine ──────────────────────────────────────
     async def admin_set_mode(self, code: str, mode: str, seconds=None):
         room = self.rooms.get(code)

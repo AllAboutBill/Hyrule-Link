@@ -614,8 +614,8 @@ class App(tk.Tk):
     def _host(self):
         self.base = self.e_server.get().strip().rstrip("/")
         data, err = http_post(self.base, "/api/rooms",
-                              {"name": "Co-op", "display_name": self.e_name.get().strip() or "Player"},
-                              headers=self._auth_headers())
+                              {"display_name": self.e_name.get().strip() or "Player"},
+                              headers=self._auth_headers())   # server auto-names the room
         if err:
             self.err.config(text=err); return
         self._enter_room(data)
@@ -669,7 +669,7 @@ class App(tk.Tk):
         self.base = f"http://localhost:{port}"
         self.e_server.delete(0, "end"); self.e_server.insert(0, self.base)
         data, err = http_post(self.base, "/api/rooms",
-                              {"name": "Co-op", "display_name": self.e_name.get().strip() or "Player"},
+                              {"display_name": self.e_name.get().strip() or "Player"},
                               headers=self._auth_headers())
         if err:
             self.err.config(text=err); return
@@ -834,8 +834,9 @@ class App(tk.Tk):
         f = self.body
 
         top = tk.Frame(f, bg=BG); top.pack(fill="x")
-        tk.Label(top, text=f"Room {self.room['code']}", fg=GOLD, bg=BG,
-                 font=(self.logo_font, 15, "bold")).pack(side="left")
+        self.room_title_lbl = tk.Label(top, text=self._room_title(), fg=GOLD, bg=BG,
+                                        font=(self.logo_font, 15, "bold"))
+        self.room_title_lbl.pack(side="left")
         self._button(top, "Spectator view",
                      lambda: webbrowser.open(
                          f"{self.base}/?watch={self.room.get('pub_id') or self.room['code']}"),
@@ -912,8 +913,21 @@ class App(tk.Tk):
         self.e_shuffle.configure(width=4); self.e_shuffle.pack(side="left")
         tk.Label(self.host_bar, text="s", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left")
         self._button(self.host_bar, "go", self._set_mode, small=True).pack(side="left", padx=4)
+        self._button(self.host_bar, "rename room", self._rename_room, small=True).pack(side="left", padx=(10, 4))
         tk.Label(self.host_bar, text="· click player=remove · right-click item=manage",
                  fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=8)
+
+    def _room_title(self):
+        name = (self.state or {}).get("name") or self.room.get("name") or "Co-op"
+        return f"{name}  ·  {self.room['code']}"
+
+    def _rename_room(self):
+        from tkinter import simpledialog
+        cur = (self.state or {}).get("name") or self.room.get("name", "")
+        new = simpledialog.askstring("Rename room", "New room name:",
+                                     initialvalue=cur, parent=self)
+        if new and new.strip():
+            self._ui_send({"type": "admin_set_name", "name": new.strip()})
 
     def _is_host(self):
         return bool(self.state) and self.state.get("you") == self.state.get("host")
@@ -1051,6 +1065,8 @@ class App(tk.Tk):
     def _render_board(self):
         for w in self.board.winfo_children():
             w.destroy()
+        if hasattr(self, "room_title_lbl"):
+            self.room_title_lbl.config(text=self._room_title())   # reflect renames
         self._render_players()
         if self._is_host():
             self.host_bar.pack(fill="x", pady=(0, 6), before=self.board_wrap)

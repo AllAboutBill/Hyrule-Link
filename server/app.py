@@ -36,7 +36,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from server import db, auth
+from server import db, auth, names
 from server.ledger import hub, resolve_pickup, resolve_claim
 from shared import protocol as P
 from shared.items import ITEMS, item_image
@@ -217,7 +217,8 @@ def _identity(request: Request):
 
 @app.post("/api/rooms")
 def create_room(request: Request, payload: dict = Body(...)):
-    name = (payload.get("name") or "Co-op").strip()
+    # silly auto-name unless the client supplied a real one (the host can rename)
+    name = (payload.get("name") or "").strip() or names.random_room_name()
     cooldown = float(payload.get("cooldown_s", 5))
     display = (payload.get("display_name") or "Player").strip()
     discord_id, avatar = _identity(request)
@@ -427,8 +428,8 @@ async def _serve_ui(ws, code, user_id, is_admin=False):
                 await ws.send_json({"type": P.REJECT, "reason": eff.reject})
             else:
                 await hub.dispatch(code, eff, msg.get("item"))
-        elif mtype in (P.ADMIN_SET_COOLDOWN, P.ADMIN_REMOVE_PLAYER,
-                       P.ADMIN_SET_DISCOVERED, P.ADMIN_SET_OWNER, P.ADMIN_SET_MODE):
+        elif mtype in (P.ADMIN_SET_COOLDOWN, P.ADMIN_REMOVE_PLAYER, P.ADMIN_SET_DISCOVERED,
+                       P.ADMIN_SET_OWNER, P.ADMIN_SET_MODE, P.ADMIN_SET_NAME):
             if not (is_admin or user_id == hub.rooms[code].host):
                 await ws.send_json({"type": P.REJECT, "reason": "host only"})
                 continue
@@ -445,6 +446,8 @@ async def _serve_ui(ws, code, user_id, is_admin=False):
                     code, int(pid) if pid is not None else None, msg.get("item"))
             elif mtype == P.ADMIN_SET_MODE:
                 await hub.admin_set_mode(code, msg.get("mode", "normal"), msg.get("seconds"))
+            elif mtype == P.ADMIN_SET_NAME:
+                await hub.admin_set_name(code, msg.get("name", ""))
 
 
 # ── static UI ──────────────────────────────────────────────────────────────

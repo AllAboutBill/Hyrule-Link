@@ -59,7 +59,7 @@ const entryName = () => (
 async function createRoom() {
   $("entry-err").textContent = "";
   try {
-    enterRoom(await api("/api/rooms", { name: "Co-op", display_name: entryName() }));
+    enterRoom(await api("/api/rooms", { display_name: entryName() }));  // server auto-names it
   } catch (e) { $("entry-err").textContent = e.message; }
 }
 
@@ -189,17 +189,22 @@ function renderRoomsList() {
   const adminOn = !!(state.me && state.me.admin);
   // Public list exposes only the watch handle (pub_id) + name — never the join
   // code. Anyone can Watch; joining as a player needs the code (typed above).
-  ul.innerHTML = rooms.map((r) => `
+  ul.innerHTML = rooms.map((r) => {
+    const roster = (r.player_list || []).map((p) =>
+      `<span class="rp">${avatarImg(p.avatar, "rp-av")}${escapeHtml(p.name)}</span>`).join("");
+    return `
     <li>
       <span class="room-meta">
         <strong>${escapeHtml(r.name || "Co-op")}</strong>
+        ${roster ? `<span class="room-roster">${roster}</span>` : ""}
         <span class="muted">${r.players} player${r.players === 1 ? "" : "s"} · ${fmtAgo(r.last_active)}</span>
       </span>
       <span class="room-row-actions">
         <button class="small" data-watch="${escapeHtml(r.pub_id)}" data-name="${escapeHtml(r.name || "Co-op")}">Watch</button>
         ${adminOn ? `<button class="small danger" data-del="${escapeHtml(r.pub_id)}">Delete</button>` : ""}
       </span>
-    </li>`).join("");
+    </li>`;
+  }).join("");
   ul.querySelectorAll("button[data-watch]").forEach((b) => {
     b.onclick = () => watchRoom(b.getAttribute("data-watch"), b.getAttribute("data-name"));
   });
@@ -390,6 +395,8 @@ function renderAdmin() {
   const panel = $("admin");
   if (!isAdmin()) { panel.classList.add("hidden"); return; }
   panel.classList.remove("hidden");
+  const nm = $("admin-name");
+  if (nm && document.activeElement !== nm) nm.value = (state.room && state.room.name) || "";
   const cd = $("admin-cooldown");
   if (document.activeElement !== cd) cd.value = Math.round(state.cooldown_s ?? 0);
   const ms = $("admin-mode");
@@ -532,6 +539,10 @@ $("btn-connect-game").onclick = () => $("agent-help").classList.toggle("hidden")
 $("rooms-refresh").onclick = loadRooms;
 $("admin-cooldown-apply").onclick = () =>
   sendWS({ type: "admin_set_cooldown", seconds: Number($("admin-cooldown").value) || 0 });
+$("admin-name-apply").onclick = () => {
+  const v = ($("admin-name").value || "").trim();
+  if (v) sendWS({ type: "admin_set_name", name: v });
+};
 $("admin-mode-apply").onclick = () =>
   sendWS({ type: "admin_set_mode", mode: $("admin-mode").value,
            seconds: Number($("admin-shuffle").value) || 120 });

@@ -133,13 +133,24 @@ def get_room_by_pub(pub_id: str):
 
 def list_rooms():
     """Public 'live rooms' list — exposes only the public watch handle (`pub_id`)
-    and never the private join `code`, so rooms can be watched but only joined as
-    a player by someone who was given the code."""
-    rows = _q(
-        "SELECT r.pub_id, r.name, r.created_at, r.last_active, "
-        "  (SELECT COUNT(*) FROM players p WHERE p.room_code = r.code) AS players "
-        "FROM rooms r WHERE r.pub_id IS NOT NULL ORDER BY r.last_active DESC").fetchall()
-    return [dict(r) for r in rows]
+    and never the private join `code`, plus the player roster (names + avatars)."""
+    rows = _q("SELECT code, pub_id, name, created_at, last_active "
+              "FROM rooms WHERE pub_id IS NOT NULL ORDER BY last_active DESC").fetchall()
+    roster = {}
+    for p in _q("SELECT room_code, display_name, avatar FROM players "
+                "ORDER BY joined_at").fetchall():
+        roster.setdefault(p["room_code"], []).append(
+            {"name": p["display_name"], "avatar": p["avatar"]})
+    out = []
+    for r in rows:
+        pl = roster.get(r["code"], [])
+        out.append({"pub_id": r["pub_id"], "name": r["name"], "last_active": r["last_active"],
+                    "players": len(pl), "player_list": pl})
+    return out
+
+
+def update_name(code: str, name: str):
+    _q("UPDATE rooms SET name=? WHERE code=?", (name, code))
 
 
 def delete_room(code: str):
