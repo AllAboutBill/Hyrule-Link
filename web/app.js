@@ -17,9 +17,8 @@ const state = {
   host: null,
   players: [],
   spectator: false,  // read-only watcher (no player)
-  admin: false,      // server confirmed our admin key for this room
-  adminKey: localStorage.getItem("hl_admin") || "",
-  adminEnabled: false,
+  admin: false,      // server confirmed admin for THIS room (via Discord session)
+  me: { logged_in: false, admin: false, login_enabled: false },  // /api/me
   rooms: [],         // last fetched live-rooms list
   mode: "normal",    // normal | hot_potato | chaos
   shuffle_s: 120,
@@ -87,18 +86,46 @@ async function joinRoom(code) {
 function showHome() {
   hide("room"); show("entry"); show("rooms");
   $("whoami").textContent = "";
-  if ($("admin-key")) $("admin-key").value = state.adminKey;
+  loadMe();
   loadRooms();
   if (!state.roomsTimer) state.roomsTimer = setInterval(() => {
     if (!$("rooms").classList.contains("hidden")) loadRooms();
   }, 8000);
 }
 
+async function loadMe() {
+  try {
+    state.me = await api("/api/me");
+  } catch (e) { state.me = { logged_in: false, admin: false, login_enabled: false }; }
+  renderAuth();
+  renderRoomsList();
+}
+
+function renderAuth() {
+  const el = $("auth");
+  if (!el) return;
+  const me = state.me || {};
+  if (me.logged_in) {
+    const tag = me.admin ? ' <span class="pill ok">mod</span>' : "";
+    el.innerHTML = `<span class="muted">${escapeHtml(me.name || "you")}</span>${tag}
+      <button id="logout-btn" class="small ghost">logout</button>`;
+    $("logout-btn").onclick = async () => {
+      try { await fetch("/auth/logout", { method: "POST" }); } catch (e) {}
+      state.me = { logged_in: false, admin: false, login_enabled: me.login_enabled };
+      renderAuth(); renderRoomsList();
+    };
+  } else if (me.login_enabled) {
+    el.innerHTML = `<a class="discord-btn" href="/auth/login">Login with Discord</a>`;
+  } else {
+    el.innerHTML = "";
+  }
+}
+
 async function loadRooms() {
   try {
     const data = await api("/api/rooms");
-    state.adminEnabled = !!data.admin_enabled;
     state.rooms = data.rooms || [];
+    if (data.login_enabled != null) state.me.login_enabled = data.login_enabled;
     renderRoomsList();
   } catch (e) { /* server unreachable — leave the last list */ }
 }
@@ -115,7 +142,7 @@ function renderRoomsList() {
   const ul = $("rooms-list");
   const rooms = state.rooms;
   $("rooms-empty").classList.toggle("hidden", rooms.length > 0);
-  const adminOn = state.adminEnabled && !!state.adminKey;
+  const adminOn = !!(state.me && state.me.admin);
   // Public list exposes only the watch handle (pub_id) + name — never the join
   // code. Anyone can Watch; joining as a player needs the code (typed above).
   ul.innerHTML = rooms.map((r) => `
@@ -135,19 +162,17 @@ function renderRoomsList() {
   ul.querySelectorAll("button[data-del]").forEach((b) => {
     b.onclick = () => deleteRoom(b.getAttribute("data-del"));
   });
-  $("admin-unlock").classList.toggle("hidden", !state.adminEnabled);
-  const badge = $("admin-state");
-  badge.textContent = state.adminKey ? "admin mode" : "";
-  badge.className = "pill ok" + (state.adminKey ? "" : " hidden");
+  // nudge logged-out mods toward the Discord login
+  $("admin-hint").classList.toggle("hidden",
+    !(state.me && state.me.login_enabled && !state.me.admin));
 }
 
 async function deleteRoom(pub) {
   if (!confirm("Delete this room? This disconnects everyone and erases its progress.")) return;
   try {
-    const res = await fetch(`/api/rooms/${encodeURIComponent(pub)}/delete`, {
-      method: "POST", headers: { "X-Admin-Key": state.adminKey },
-    });
-    if (!res.ok) throw new Error(res.status === 403 ? "wrong admin key" : `delete failed (${res.status})`);
+    const res = await fetch(`/api/rooms/${encodeURIComponent(pub)}/delete`, { method: "POST" });
+    if (!res.ok) throw new Error(res.status === 403 ? "log in with a mod Discord account first"
+                                                    : `delete failed (${res.status})`);
     loadRooms();
   } catch (e) { alert(e.message); }
 }
@@ -225,8 +250,7 @@ function connectWS() {
       hello.player_id = state.room.player_id;
       hello.token = state.room.player_token;
     }
-    if (state.adminKey) hello.admin_key = state.adminKey;
-    ws.send(JSON.stringify(hello));
+    ws.send(JSON.stringify(hello));   // admin is derived from the Discord session cookie
     $("ws-status").textContent = "live";
     $("ws-status").className = "pill ok";
   };
@@ -461,11 +485,6 @@ $("admin-cooldown-apply").onclick = () =>
 $("admin-mode-apply").onclick = () =>
   sendWS({ type: "admin_set_mode", mode: $("admin-mode").value,
            seconds: Number($("admin-shuffle").value) || 120 });
-$("admin-key").addEventListener("input", (e) => {
-  state.adminKey = e.target.value.trim();
-  localStorage.setItem("hl_admin", state.adminKey);
-  renderRoomsList();
-});
 
 if ($("entry-name") && state.name) $("entry-name").value = state.name;
 startCooldownTick();

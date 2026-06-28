@@ -137,10 +137,13 @@ duplicate.
   - 🌀 **Chaos** — every found item is randomly reassigned among its online
     finders on a shared timer.
   - **Normal** — the usual find/claim/steal game.
-- **Global admin (you).** Set `HYRULELINK_ADMIN_KEY` in the server's environment.
-  On the web home page an **Admin key** box appears; enter the key to **delete any
-  room** and to **manage / kick** in *any* room (not just ones you host). With no
-  key set, global admin is disabled.
+- **Global admin via Discord.** Click **Login with Discord** on the web page;
+  your server's **owner and mod roles** become HyruleLink admins — **delete any
+  room** and **manage / kick** in *any* room (not just ones you host). Configure
+  it with the `DISCORD_*` + `SESSION_SECRET` env vars (see `.env.example`); you can
+  reuse an existing Discord app by adding `…/auth/callback` to its OAuth redirects.
+  With it unconfigured, global admin is simply unavailable (hosts still run their
+  own rooms).
 
 > **Supported emulators (all auto-detected):**
 > - **snes9x-nwa** (EmuNetworkAccess build) — direct, nothing extra.
@@ -167,10 +170,15 @@ python run_agent.py --setup                 # player: login/join, writes config
 python run_agent.py                          # player: connect + play
 ```
 
-Server environment variables:
+Server environment variables (the server auto-loads a git-ignored `.env`; see
+`.env.example`):
 
 ```
-HYRULELINK_ADMIN_KEY    secret that unlocks global admin on the web (unset = off)
+DISCORD_CLIENT_ID / DISCORD_CLIENT_SECRET   Discord OAuth app (global admin login)
+DISCORD_REDIRECT_URI    e.g. https://hyrulelink.billogna.lol/auth/callback
+DISCORD_GUILD_ID        your server; owner + mod roles below get admin
+DISCORD_MOD_ROLE_IDS    comma-separated role ids that count as admin
+SESSION_SECRET          random string signing the login cookie
 HYRULELINK_ROOM_TTL_DAYS  auto-delete rooms idle this long (default 14)
 HYRULELINK_DB           sqlite path (default server/hyrulelink.db)
 ```

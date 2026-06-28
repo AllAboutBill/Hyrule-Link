@@ -25,6 +25,7 @@
       <span class="site-logo">HyruleLink</span>
       <div class="site-links">
         <span id="whoami" class="muted"></span>
+        <span id="auth" class="auth"></span>
         <a href="https://billogna.lol">billogna.lol</a>
       </div>
     </nav>
@@ -59,12 +60,8 @@
       </div>
       <ul id="rooms-list" class="rooms-list"></ul>
       <p id="rooms-empty" class="muted hidden">No active rooms right now.</p>
-      <div id="admin-unlock" class="admin-unlock hidden">
-        <label class="muted">Admin key
-          <input id="admin-key" type="password" placeholder="enter to manage any room" autocomplete="off" />
-        </label>
-        <span id="admin-state" class="pill"></span>
-      </div>
+      <p id="admin-hint" class="muted hidden">Server mods: <strong>Log in with Discord</strong>
+        (top-right) to delete/manage any room.</p>
     </section>
 
     <!-- Room -->
