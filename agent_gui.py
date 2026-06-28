@@ -227,6 +227,7 @@ class App(tk.Tk):
         self.agent = None           # emulator link (HyruleAgent)
         self.transport = None
         self.state = None           # latest ledger state from the ui socket
+        self._host_collapsed = bool(self.cfg.get("host_collapsed", False))
         self.log_q = queue.Queue()
         self.state_q = queue.Queue()
 
@@ -837,6 +838,8 @@ class App(tk.Tk):
         self.room_title_lbl = tk.Label(top, text=self._room_title(), fg=GOLD, bg=BG,
                                         font=(self.logo_font, 15, "bold"))
         self.room_title_lbl.pack(side="left")
+        # Rename button sits by the title; shown only to the host (in _render_board)
+        self.rename_btn = self._button(top, "✎ Rename", self._rename_room, small=True)
         self._button(top, "Spectator view",
                      lambda: webbrowser.open(
                          f"{self.base}/?watch={self.room.get('pub_id') or self.room['code']}"),
@@ -898,24 +901,44 @@ class App(tk.Tk):
     def _build_host_bar(self):
         for w in self.host_bar.winfo_children():
             w.destroy()
-        tk.Label(self.host_bar, text="★ Host:", fg=GOLD, bg=BG, font=("Segoe UI Semibold", 9)).pack(side="left")
-        tk.Label(self.host_bar, text="cooldown", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(8, 2))
-        self.e_cd = self._entry(self.host_bar)
-        self.e_cd.configure(width=4); self.e_cd.pack(side="left")
-        self._button(self.host_bar, "set", self._set_cooldown, small=True).pack(side="left", padx=4)
-        # game mode controls
-        tk.Label(self.host_bar, text="· mode", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(10, 2))
+        # collapsible header
+        hdr = tk.Frame(self.host_bar, bg=BG); hdr.pack(fill="x")
+        self._host_toggle = self._button(hdr, "", self._toggle_host_controls, small=True)
+        self._host_toggle.pack(side="left")
+
+        # the controls themselves live in a frame we can hide
+        self.host_ctrls = tk.Frame(self.host_bar, bg=BG)
+        c = self.host_ctrls
+        tk.Label(c, text="cooldown", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(2, 2))
+        self.e_cd = self._entry(c); self.e_cd.configure(width=4); self.e_cd.pack(side="left")
+        self._button(c, "set", self._set_cooldown, small=True).pack(side="left", padx=4)
+        tk.Label(c, text="· mode", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(10, 2))
         self.mode_var = tk.StringVar(value="normal")
-        ttk.Combobox(self.host_bar, textvariable=self.mode_var, state="readonly", width=11,
+        ttk.Combobox(c, textvariable=self.mode_var, state="readonly", width=11,
                      values=["normal", "hot_potato", "chaos"]).pack(side="left")
-        tk.Label(self.host_bar, text="every", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(6, 2))
-        self.e_shuffle = self._entry(self.host_bar)
-        self.e_shuffle.configure(width=4); self.e_shuffle.pack(side="left")
-        tk.Label(self.host_bar, text="s", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left")
-        self._button(self.host_bar, "go", self._set_mode, small=True).pack(side="left", padx=4)
-        self._button(self.host_bar, "rename room", self._rename_room, small=True).pack(side="left", padx=(10, 4))
-        tk.Label(self.host_bar, text="· click player=remove · right-click item=manage",
+        tk.Label(c, text="every", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(6, 2))
+        self.e_shuffle = self._entry(c); self.e_shuffle.configure(width=4); self.e_shuffle.pack(side="left")
+        tk.Label(c, text="s", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left")
+        self._button(c, "go", self._set_mode, small=True).pack(side="left", padx=4)
+        tk.Label(c, text="· click player=remove · right-click item=manage",
                  fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=8)
+        self._apply_host_collapse()
+
+    def _toggle_host_controls(self):
+        self._host_collapsed = not self._host_collapsed
+        self.cfg["host_collapsed"] = self._host_collapsed
+        save_settings(self.cfg)
+        self._apply_host_collapse()
+
+    def _apply_host_collapse(self):
+        if not hasattr(self, "host_ctrls"):
+            return
+        if self._host_collapsed:
+            self.host_ctrls.pack_forget()
+            self._host_toggle.config(text="▸ ★ Host controls")
+        else:
+            self.host_ctrls.pack(fill="x", pady=(3, 0))
+            self._host_toggle.config(text="▾ ★ Host controls")
 
     def _room_title(self):
         name = (self.state or {}).get("name") or self.room.get("name") or "Co-op"
@@ -1067,6 +1090,11 @@ class App(tk.Tk):
             w.destroy()
         if hasattr(self, "room_title_lbl"):
             self.room_title_lbl.config(text=self._room_title())   # reflect renames
+        if hasattr(self, "rename_btn"):                           # host-only rename
+            if self._is_host() and not self.rename_btn.winfo_ismapped():
+                self.rename_btn.pack(side="left", padx=(8, 0))
+            elif not self._is_host():
+                self.rename_btn.pack_forget()
         self._render_players()
         if self._is_host():
             self.host_bar.pack(fill="x", pady=(0, 6), before=self.board_wrap)
