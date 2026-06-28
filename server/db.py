@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS players (
     display_name  TEXT NOT NULL,
     player_token  TEXT NOT NULL,
     discord_id    TEXT,
+    avatar        TEXT,
     joined_at     REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS ledger (
@@ -96,6 +97,8 @@ def init():
         pcols = [r[1] for r in _conn.execute("PRAGMA table_info(players)").fetchall()]
         if "discord_id" not in pcols:
             _conn.execute("ALTER TABLE players ADD COLUMN discord_id TEXT")
+        if "avatar" not in pcols:
+            _conn.execute("ALTER TABLE players ADD COLUMN avatar TEXT")
         # migrate older DBs: per-player discovered tier (defaults legacy rows to 1)
         disc_cols = [r[1] for r in _conn.execute("PRAGMA table_info(discovered)").fetchall()]
         if "level" not in disc_cols:
@@ -182,11 +185,16 @@ def update_mode(code: str, mode: str, shuffle_s: float):
 
 
 # ── players ──────────────────────────────────────────────────────────────
-def add_player(room_code: str, display_name: str, discord_id: str = None):
+def add_player(room_code: str, display_name: str, discord_id: str = None, avatar: str = None):
     token = secrets.token_urlsafe(18)
-    cur = _q("INSERT INTO players(room_code, display_name, player_token, discord_id, joined_at) "
-             "VALUES (?,?,?,?,?)", (room_code, display_name, token, discord_id, time.time()))
+    cur = _q("INSERT INTO players(room_code, display_name, player_token, discord_id, avatar, joined_at) "
+             "VALUES (?,?,?,?,?,?)", (room_code, display_name, token, discord_id, avatar, time.time()))
     return cur.lastrowid, token
+
+
+def set_player_identity(player_id: int, display_name: str, avatar: str):
+    """Refresh a Discord-linked player's name + avatar when they rejoin."""
+    _q("UPDATE players SET display_name=?, avatar=? WHERE id=?", (display_name, avatar, player_id))
 
 
 def get_player(player_id: int):

@@ -142,7 +142,8 @@ function renderAuth() {
   const me = state.me || {};
   if (me.logged_in) {
     const tag = me.admin ? ' <span class="pill ok">mod</span>' : "";
-    el.innerHTML = `<span class="muted">${escapeHtml(me.name || "you")}</span>${tag}
+    const av = avatarImg(me.avatar, "me-avatar");
+    el.innerHTML = `${av}<span class="muted">${escapeHtml(me.name || "you")}</span>${tag}
       <button id="logout-btn" class="small ghost">logout</button>`;
     $("logout-btn").onclick = async () => {
       try { await fetch("/auth/logout", { method: "POST" }); } catch (e) {}
@@ -333,9 +334,13 @@ function statusDot(p) {
   return `<span class="dot ${cls}" title="${title}"></span>`;
 }
 
+function avatarImg(url, cls) {
+  return url ? `<img class="${cls}" src="${escapeHtml(url)}" alt="" loading="lazy" />` : "";
+}
+
 function renderPlayers(players) {
   $("players").innerHTML = players
-    .map((p) => `<li>${statusDot(p)}${p.id === state.you ? "★ " : ""}${escapeHtml(p.name)}</li>`)
+    .map((p) => `<li>${statusDot(p)}${avatarImg(p.avatar, "pavatar")}${p.id === state.you ? "★ " : ""}${escapeHtml(p.name)}</li>`)
     .join("");
 }
 
@@ -459,10 +464,12 @@ function cardHtml(cat, e) {
   const holdTimer = (state.mode === "hot_potato" && e.owner && e.hold_remaining != null)
     ? `<div class="item-sub hold">⏱ ${fmtClock(e.hold_remaining)}</div>` : "";
   const owner = e.owner ? escapeHtml(e.owner_name || "?") : "unowned";
+  const ownerP = e.owner ? state.players.find((p) => p.id === e.owner) : null;
+  const ownerAv = ownerP ? avatarImg(ownerP.avatar, "oavatar") : "";
   const tier = e.tier && e.tier !== "—" ? ` <span class="tier">${escapeHtml(e.tier)}</span>` : "";
   return `<div class="item ${cls}">
     <div class="item-head">${iconHtml(cat, e)}<div class="item-name">${escapeHtml(cat.name)}${tier}</div></div>
-    <div class="item-sub">held by <strong>${owner}</strong></div>
+    <div class="item-sub">held by ${ownerAv}<strong>${owner}</strong></div>
     ${action}${holdTimer}
     ${chips}
   </div>`;

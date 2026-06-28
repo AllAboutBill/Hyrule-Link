@@ -33,7 +33,7 @@ def _load_dotenv():
 _load_dotenv()
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from server import db, auth
@@ -50,10 +50,27 @@ db.init()
 ROOM_TTL_DAYS = float(os.environ.get("HYRULELINK_ROOM_TTL_DAYS", "14"))
 
 
-def _is_admin_session(request_or_cookies) -> bool:
-    cookies = getattr(request_or_cookies, "cookies", request_or_cookies)
-    sess = auth.session_from_cookies(cookies)
-    return bool(sess and sess.get("admin"))
+def _session_from_request(request: Request):
+    """Session from the browser cookie OR the X-HL-Session header (desktop app)."""
+    return (auth.session_from_cookies(request.cookies)
+            or auth.session_from_token(request.headers.get("x-hl-session", "")))
+
+
+def _session_from_ws(ws, hello: dict):
+    """Session from the WS cookie (browser) OR the hello `session` field (app)."""
+    return (auth.session_from_cookies(ws.cookies)
+            or auth.session_from_token(hello.get("session", "")))
+
+
+# pairing store for the desktop app's browser login: pair_id -> {token, exp}
+_PAIRINGS = {}
+_PAIR_TTL = 600
+
+
+def _pairings_gc():
+    now = time.time()
+    for pid in [p for p, v in _PAIRINGS.items() if v["exp"] < now]:
+        _PAIRINGS.pop(pid, None)
 
 
 def _prune_rooms():
@@ -93,17 +110,19 @@ async def _prune_loop():
 
 # ── Discord login ───────────────────────────────────────────────────────────
 @app.get("/auth/login")
-def auth_login():
+def auth_login(pair: str = ""):
     if not auth.LOGIN_ENABLED:
         raise HTTPException(404, "discord login not configured")
-    return RedirectResponse(auth.authorize_url(auth.new_state()))
+    # `pair` (set by the desktop app) is carried through the signed OAuth state
+    return RedirectResponse(auth.authorize_url(auth.new_state(pair=pair)))
 
 
 @app.get("/auth/callback")
 async def auth_callback(code: str = "", state: str = ""):
     if not auth.LOGIN_ENABLED:
         raise HTTPException(404)
-    if not code or not auth.unsign(state):          # CSRF / bad request
+    st = auth.unsign(state)
+    if not code or not st:                          # CSRF / bad request
         return RedirectResponse("/?login=error")
     try:
         prof = await asyncio.to_thread(auth.fetch_profile, code)
@@ -112,6 +131,14 @@ async def auth_callback(code: str = "", state: str = ""):
         return RedirectResponse("/?login=error")
     sess = auth.sign({"uid": prof["id"], "name": prof["name"], "avatar": prof["avatar"],
                       "admin": prof["is_admin"], "exp": time.time() + auth.SESSION_TTL})
+    pair = st.get("pair")
+    if pair:                                        # desktop app login — hand the
+        _pairings_gc()                              # token to the polling app
+        _PAIRINGS[pair] = {"token": sess, "exp": time.time() + _PAIR_TTL}
+        return HTMLResponse("<!doctype html><meta charset=utf-8>"
+            "<body style='font-family:system-ui;background:#070709;color:#e8e6f0;"
+            "text-align:center;padding-top:18vh'><h2>✓ Logged in</h2>"
+            "<p>You can close this tab and return to HyruleLink.</p></body>")
     resp = RedirectResponse("/")
     resp.set_cookie(auth.SESSION_COOKIE, sess, max_age=auth.SESSION_TTL,
                     httponly=True, secure=True, samesite="lax")
@@ -125,9 +152,35 @@ def auth_logout():
     return resp
 
 
+# desktop-app login: start a pairing, then poll for the session token
+@app.post("/auth/device/start")
+def device_start(request: Request):
+    if not auth.LOGIN_ENABLED:
+        raise HTTPException(404, "discord login not configured")
+    _pairings_gc()
+    pair = auth.new_pairing_id()
+    _PAIRINGS[pair] = {"token": None, "exp": time.time() + _PAIR_TTL}
+    base = str(request.base_url).rstrip("/")
+    return {"pair": pair, "login_url": f"{base}/auth/login?pair={pair}"}
+
+
+@app.get("/auth/device/poll")
+def device_poll(pair: str = ""):
+    _pairings_gc()
+    entry = _PAIRINGS.get(pair)
+    if not entry:
+        return {"status": "expired"}
+    if not entry["token"]:
+        return {"status": "pending"}
+    token = _PAIRINGS.pop(pair)["token"]            # one-time
+    sess = auth.unsign(token) or {}
+    return {"status": "ok", "token": token, "name": sess.get("name"),
+            "avatar": sess.get("avatar"), "admin": bool(sess.get("admin"))}
+
+
 @app.get("/api/me")
 def api_me(request: Request):
-    sess = auth.session_from_cookies(request.cookies)
+    sess = _session_from_request(request)
     if not sess:
         return {"logged_in": False, "login_enabled": auth.LOGIN_ENABLED}
     return {"logged_in": True, "login_enabled": auth.LOGIN_ENABLED,
@@ -144,7 +197,7 @@ def list_rooms():
 
 @app.post("/api/rooms/{handle}/delete")
 async def delete_room(handle: str, request: Request):
-    if not _is_admin_session(request):
+    if not (_session_from_request(request) or {}).get("admin"):
         raise HTTPException(403, "admin only — log in with a mod Discord account")
     # admins act on the public handle (that's all the list exposes), but accept a
     # raw code too for convenience.
@@ -156,9 +209,10 @@ async def delete_room(handle: str, request: Request):
     return {"ok": True}
 
 
-def _discord_id(request: Request):
-    sess = auth.session_from_cookies(request.cookies)
-    return sess.get("uid") if sess else None
+def _identity(request: Request):
+    """(discord_id, avatar) for the caller, or (None, None) if not logged in."""
+    sess = _session_from_request(request)
+    return (sess.get("uid"), sess.get("avatar")) if sess else (None, None)
 
 
 @app.post("/api/rooms")
@@ -166,8 +220,9 @@ def create_room(request: Request, payload: dict = Body(...)):
     name = (payload.get("name") or "Co-op").strip()
     cooldown = float(payload.get("cooldown_s", 5))
     display = (payload.get("display_name") or "Player").strip()
+    discord_id, avatar = _identity(request)
     code = db.create_room(name, cooldown)
-    player_id, token = db.add_player(code, display, _discord_id(request))
+    player_id, token = db.add_player(code, display, discord_id, avatar)
     db.set_host(code, player_id)        # creator is the host/admin
     return _room_payload(code, player_id, token)
 
@@ -180,13 +235,14 @@ def join_room(code: str, request: Request, payload: dict = Body(...)):
     display = (payload.get("display_name") or "Player").strip()
     # a logged-in user who's already in this room rejoins their existing player
     # (keeps items) instead of piling up duplicates.
-    discord_id = _discord_id(request)
+    discord_id, avatar = _identity(request)
     if discord_id:
         existing = db.get_player_by_discord(code, discord_id)
         if existing:
+            db.set_player_identity(existing["id"], display, avatar)   # freshen name/avatar
             db.touch_room(code); hub.refresh_names(code)
             return _room_payload(code, existing["id"], existing["player_token"])
-    player_id, token = db.add_player(code, display, discord_id)
+    player_id, token = db.add_player(code, display, discord_id, avatar)
     db.touch_room(code)
     hub.refresh_names(code)
     return _room_payload(code, player_id, token)
@@ -195,7 +251,7 @@ def join_room(code: str, request: Request, payload: dict = Body(...)):
 @app.get("/api/my-rooms")
 def my_rooms(request: Request):
     """Rooms the logged-in Discord user has a player in (their rejoin list)."""
-    discord_id = _discord_id(request)
+    discord_id, _ = _identity(request)
     if not discord_id:
         return {"rooms": []}
     return {"rooms": db.rooms_for_discord(discord_id)}
@@ -204,7 +260,7 @@ def my_rooms(request: Request):
 @app.post("/api/rooms/{code}/rejoin")
 def rejoin_room(code: str, request: Request):
     """Re-enter a room as your existing Discord-linked player (any device)."""
-    discord_id = _discord_id(request)
+    discord_id, avatar = _identity(request)
     if not discord_id:
         raise HTTPException(401, "log in with Discord first")
     code = code.upper()
@@ -213,6 +269,7 @@ def rejoin_room(code: str, request: Request):
     p = db.get_player_by_discord(code, discord_id)
     if not p:
         raise HTTPException(404, "you're not in that room")
+    db.set_player_identity(p["id"], p["display_name"], avatar)        # freshen avatar
     db.touch_room(code); hub.refresh_names(code)
     return _room_payload(code, p["id"], p["player_token"])
 
@@ -264,8 +321,9 @@ async def ws_endpoint(ws: WebSocket):
             await ws.close()
             return
         role = hello.get("role")
-        # admin comes from the Discord session cookie sent with the WS handshake
-        is_admin = _is_admin_session(ws)
+        # admin comes from the Discord session — browser cookie or app `session`
+        sess = _session_from_ws(ws, hello)
+        is_admin = bool(sess and sess.get("admin"))
 
         if role == P.ROLE_SPECTATOR:
             # watchers address the room by its PUBLIC handle, never the join code

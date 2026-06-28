@@ -57,7 +57,8 @@ class RoomState:
     shuffle_s: float = 120.0   # rotation interval for the shuffle modes (seconds)
     last_shuffle: float = 0.0  # last chaos reshuffle time
     items: Dict[str, ItemState] = field(default_factory=dict)
-    names: Dict[int, str] = field(default_factory=dict)  # user_id -> display name
+    names: Dict[int, str] = field(default_factory=dict)    # user_id -> display name
+    avatars: Dict[int, str] = field(default_factory=dict)  # user_id -> Discord avatar url
     # connectivity per player: user_id -> {"agent": bool, "emu": bool}
     status: Dict[int, dict] = field(default_factory=dict)
 
@@ -166,6 +167,7 @@ class RoomHub:
                          last_shuffle=time.time())
         for p in db.room_players(code):
             room.names[p["id"]] = p["display_name"]
+            room.avatars[p["id"]] = p["avatar"]
         ledger_rows, disc_rows = db.load_ledger(code)
         for r in ledger_rows:
             room.items[r["item_key"]] = ItemState(
@@ -194,6 +196,7 @@ class RoomHub:
         if room:
             for p in db.room_players(code):
                 room.names[p["id"]] = p["display_name"]
+                room.avatars[p["id"]] = p["avatar"]
 
     # -- connection registries ----------------------------------------------
     def register_agent(self, code, user_id, ws):
@@ -301,7 +304,7 @@ class RoomHub:
             "shuffle_remaining": (max(0.0, room.last_shuffle + room.shuffle_s - now)
                                   if room.mode == MODE_CHAOS else 0.0),
             "players": [
-                {"id": uid, "name": nm,
+                {"id": uid, "name": nm, "avatar": room.avatars.get(uid),
                  "agent": room.status.get(uid, {}).get("agent", False),
                  "emu": room.status.get(uid, {}).get("emu", False)}
                 for uid, nm in room.names.items()

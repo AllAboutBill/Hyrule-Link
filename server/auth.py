@@ -75,13 +75,26 @@ def unsign(token: str):
         return None
 
 
-def new_state() -> str:
-    return sign({"n": _b64e(os.urandom(9)), "exp": time.time() + STATE_TTL})
+def new_state(pair: str = "") -> str:
+    d = {"n": _b64e(os.urandom(9)), "exp": time.time() + STATE_TTL}
+    if pair:
+        d["pair"] = pair
+    return sign(d)
+
+
+def new_pairing_id() -> str:
+    return _b64e(os.urandom(18))
 
 
 def session_from_cookies(cookies: dict):
     tok = cookies.get(SESSION_COOKIE)
     return unsign(tok) if tok else None
+
+
+def session_from_token(token: str):
+    """For the desktop app, which sends the signed session as a header / WS field
+    instead of a browser cookie."""
+    return unsign(token) if token else None
 
 
 def authorize_url(state: str) -> str:

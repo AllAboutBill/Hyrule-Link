@@ -99,10 +99,12 @@ def save_settings(d):
         pass
 
 
-def http_post(base, path, payload):
+def http_post(base, path, payload, headers=None):
     req = urllib.request.Request(base.rstrip("/") + path,
                                  data=json.dumps(payload).encode(), method="POST")
     req.add_header("Content-Type", "application/json")
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             return json.loads(r.read().decode()), None
@@ -114,6 +116,17 @@ def http_post(base, path, payload):
         return None, detail
     except Exception as e:
         return None, f"can't reach server: {e}"
+
+
+def http_get(base, path, headers=None):
+    req = urllib.request.Request(base.rstrip("/") + path)
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read().decode()), None
+    except Exception as e:
+        return None, str(e)
 
 
 def detect_emulator():
@@ -200,6 +213,9 @@ class App(tk.Tk):
 
         self.cfg = load_settings()
         self.base = self.cfg.get("server", PUBLIC_SERVER)
+        self.session = self.cfg.get("session")   # signed Discord session token (optional)
+        self.me = None              # {name, avatar, admin} when logged in
+        self.login_q = queue.Queue()  # device-login results from the poll thread
         self.local_server = None    # subprocess if hosting a server on this PC
         self.sni_proc = None        # bundled SNI bridge, only if WE started it
         self.tunnel_proc = None     # cloudflared subprocess (optional public link)
@@ -233,6 +249,7 @@ class App(tk.Tk):
 
         self._build_chrome()
         self.show_start()
+        self._check_session_async()      # validate a saved Discord login
         threading.Thread(target=self._detect_loop, daemon=True).start()
         self._tick()
         self._animate_fields()
@@ -310,6 +327,86 @@ class App(tk.Tk):
 
     def _dot(self, canvas, color):
         canvas.delete("all"); canvas.create_oval(2, 2, 11, 11, fill=color, outline="")
+
+    # ── Discord login (browser pairing flow) ─────────────────────────────────
+    def _auth_headers(self):
+        return {"X-HL-Session": self.session} if self.session else {}
+
+    def _check_session_async(self):
+        """Validate the stored session against the current server (background)."""
+        if not self.session:
+            return
+        base = self.base
+        def work():
+            data, _ = http_get(base, "/api/me", self._auth_headers())
+            self.login_q.put({"status": "me", "me": data if (data and data.get("logged_in")) else None})
+        threading.Thread(target=work, daemon=True).start()
+
+    def _discord_login(self):
+        base = (self.e_server.get().strip().rstrip("/") if hasattr(self, "e_server") else self.base)
+        self.base = base
+        data, err = http_post(base, "/auth/device/start", {})
+        if err or not data or "login_url" not in data:
+            if hasattr(self, "err"):
+                self.err.config(text=err or "Discord login isn't enabled on this server")
+            return
+        webbrowser.open(data["login_url"])
+        if hasattr(self, "err"):
+            self.err.config(text="Finish login in your browser, then come back…")
+        threading.Thread(target=self._poll_login, args=(base, data["pair"]), daemon=True).start()
+
+    def _poll_login(self, base, pair):
+        for _ in range(90):                       # ~3 minutes
+            if self._stop_all.wait(2):
+                return
+            data, _ = http_get(base, f"/auth/device/poll?pair={pair}", {})
+            if not data:
+                continue
+            if data.get("status") in ("ok", "expired"):
+                self.login_q.put(data)
+                return
+
+    def _discord_logout(self):
+        self.session = None
+        self.me = None
+        self.cfg.pop("session", None)
+        save_settings(self.cfg)
+        self.show_start()
+
+    def _load_my_rooms_async(self):
+        base = self.base
+        def work():
+            data, _ = http_get(base, "/api/my-rooms", self._auth_headers())
+            rooms = (data or {}).get("rooms", [])
+            self.after(0, lambda: self._render_my_rooms(rooms))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _render_my_rooms(self, rooms):
+        fr = getattr(self, "myrooms_frame", None)
+        if fr is None or not fr.winfo_exists() or not rooms:
+            return
+        for w in fr.winfo_children():
+            w.destroy()
+        box = tk.Frame(fr, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+        box.pack(fill="x")
+        tk.Label(box, text="Your rooms", fg=INK, bg=PANEL,
+                 font=("Segoe UI Semibold", 10)).pack(anchor="w", padx=10, pady=(8, 2))
+        for r in rooms[:8]:
+            row = tk.Frame(box, bg=PANEL); row.pack(fill="x", padx=10, pady=2)
+            star = "★ " if r.get("is_host") else ""
+            tk.Label(row, text=f"{star}{r.get('name', 'Co-op')}", fg=INK, bg=PANEL,
+                     font=("Segoe UI", 9)).pack(side="left")
+            self._button(row, "Rejoin", lambda c=r["code"]: self._rejoin(c), small=True).pack(side="right")
+        tk.Frame(box, bg=PANEL, height=6).pack()
+
+    def _rejoin(self, code):
+        data, err = http_post(self.base, f"/api/rooms/{code}/rejoin", {},
+                              headers=self._auth_headers())
+        if err:
+            if hasattr(self, "err"):
+                self.err.config(text=err)
+            return
+        self._enter_room(data)
 
     def _item_icon(self, filename, dim=False):
         """Load + cache an item sprite scaled to ICON_PX (grayscaled/faded when
@@ -416,9 +513,28 @@ class App(tk.Tk):
         f = self.body
         self._label(f, "Start playing", fg=ACCENT, font=(self.logo_font, 14, "bold")).pack(anchor="w", pady=(6, 10))
 
+        # Discord login row
+        drow = tk.Frame(f, bg=BG); drow.pack(fill="x", pady=(0, 8))
+        if self.me:
+            tag = "  ★ mod" if self.me.get("admin") else ""
+            self._label(drow, f"✓ Discord: {self.me.get('name', '')}{tag}", fg=GREEN,
+                        font=("Segoe UI Semibold", 10)).pack(side="left")
+            self._button(drow, "Logout", self._discord_logout, small=True).pack(side="left", padx=8)
+        else:
+            self._button(drow, "Login with Discord", self._discord_login, small=True).pack(side="left")
+            self._label(drow, "optional — keeps your rooms across devices + mod powers",
+                        fg=MUTED, font=("Segoe UI", 8)).pack(side="left", padx=8)
+
         self._label(f, "Your name", fg=MUTED, font=("Segoe UI", 9)).pack(anchor="w")
-        self.e_name = self._entry(f, value=self.cfg.get("display", ""))
+        default_name = self.cfg.get("display") or (self.me.get("name") if self.me else "") or ""
+        self.e_name = self._entry(f, value=default_name)
         self.e_name.pack(fill="x", pady=(0, 8), ipady=4)
+
+        # Your rooms (logged-in) — filled asynchronously
+        self.myrooms_frame = tk.Frame(f, bg=BG)
+        if self.me:
+            self.myrooms_frame.pack(fill="x", pady=(0, 4))
+            self._load_my_rooms_async()
 
         self._label(f, "Server", fg=MUTED, font=("Segoe UI", 9)).pack(anchor="w")
         self.e_server = self._entry(f, value=self.cfg.get("server", PUBLIC_SERVER))
@@ -462,7 +578,8 @@ class App(tk.Tk):
     def _host(self):
         self.base = self.e_server.get().strip().rstrip("/")
         data, err = http_post(self.base, "/api/rooms",
-                              {"name": "Co-op", "display_name": self.e_name.get().strip() or "Player"})
+                              {"name": "Co-op", "display_name": self.e_name.get().strip() or "Player"},
+                              headers=self._auth_headers())
         if err:
             self.err.config(text=err); return
         self._enter_room(data)
@@ -516,7 +633,8 @@ class App(tk.Tk):
         self.base = f"http://localhost:{port}"
         self.e_server.delete(0, "end"); self.e_server.insert(0, self.base)
         data, err = http_post(self.base, "/api/rooms",
-                              {"name": "Co-op", "display_name": self.e_name.get().strip() or "Player"})
+                              {"name": "Co-op", "display_name": self.e_name.get().strip() or "Player"},
+                              headers=self._auth_headers())
         if err:
             self.err.config(text=err); return
         use_tunnel = self.tunnel_var.get()
@@ -618,7 +736,8 @@ class App(tk.Tk):
                 self._enter_room(data); return  # resumed
             # else (server reset / unknown player) fall through to a fresh join
         data, err = http_post(self.base, f"/api/rooms/{code}/join",
-                              {"display_name": self.e_name.get().strip() or "Player"})
+                              {"display_name": self.e_name.get().strip() or "Player"},
+                              headers=self._auth_headers())
         if err:
             self.err.config(text=err); return
         self._enter_room(data)
@@ -646,9 +765,11 @@ class App(tk.Tk):
         while not self._ui_stop.is_set():
             try:
                 conn = websocket.create_connection(self._ws_url(), timeout=6)
-                conn.send(json.dumps({"type": "hello", "role": "ui", "room": self.room["code"],
-                                      "player_id": self.room["player_id"],
-                                      "token": self.room["player_token"]}))
+                hello = {"type": "hello", "role": "ui", "room": self.room["code"],
+                         "player_id": self.room["player_id"], "token": self.room["player_token"]}
+                if self.session:
+                    hello["session"] = self.session     # carries Discord identity/admin
+                conn.send(json.dumps(hello))
                 with self.ui_lock:
                     self.ui_conn = conn
                 while not self._ui_stop.is_set():
@@ -1275,6 +1396,30 @@ class App(tk.Tk):
 
     # ── periodic refresh ────────────────────────────────────────────────────
     def _tick(self):
+        # Discord login results from the background poll/validate threads
+        while True:
+            try:
+                msg = self.login_q.get_nowait()
+            except queue.Empty:
+                break
+            st = msg.get("status")
+            if st == "ok":
+                self.session = msg["token"]
+                self.cfg["session"] = self.session
+                save_settings(self.cfg)
+                self.me = {"name": msg.get("name"), "avatar": msg.get("avatar"),
+                           "admin": msg.get("admin")}
+                if self.room is None:
+                    self.show_start()
+            elif st == "me":
+                self.me = msg.get("me")
+                if self.me is None:           # stored session was invalid/expired
+                    self.session = None
+                    self.cfg.pop("session", None); save_settings(self.cfg)
+                if self.room is None:
+                    self.show_start()
+            elif st == "expired" and self.room is None and hasattr(self, "err"):
+                self.err.config(text="Login timed out — click Login with Discord again.")
         while True:
             try:
                 self._log(self.log_q.get_nowait())
