@@ -244,13 +244,22 @@ class RoomHub:
             item = BY_KEY.get(key)
             if not item:
                 continue
+            # If nobody owns it and nobody has it found (e.g. a host un-found it for
+            # every player), the token is effectively undiscovered again — emit no
+            # entry so the UI shows it dimmed instead of a stale "lit up" card.
+            if it.owner is None and not it.discovered:
+                continue
+            # An unowned token has no "current" tier (each finder has their own),
+            # so don't surface the last holder's level/tier until someone claims.
+            owned = it.owner is not None
+            level = it.level if owned else 0
             ledger[key] = {
                 "name": item.name,
                 "owner": it.owner,
                 "owner_name": room.names.get(it.owner) if it.owner else None,
-                "level": it.level,
-                "tier": tier_label(item, it.level),
-                "image": item_image(key, it.level),
+                "level": level,
+                "tier": tier_label(item, level) if owned else "—",
+                "image": item_image(key, level),
                 "discovered": sorted(it.discovered),
                 "cooldown_remaining": max(0.0, it.cooldown_until - now),
             }
