@@ -17,10 +17,9 @@ agent/config_a.json
 agent/config_b.json
 agent/gui_settings.json
 
-# Large vendored binaries (download separately)
+# Downloaded binaries (source adapters and connector assets remain tracked)
 tools/cloudflared.exe
-tools/sni/
-agent/sni/
+tools/sni/sni.exe
 
 # ROM seeds (copyrighted; generate locally)
 seeds/

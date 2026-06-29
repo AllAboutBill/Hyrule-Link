@@ -13,6 +13,9 @@ import secrets
 import threading
 import time
 
+ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O or 1/I
+ROOM_CODE_LENGTH = 10                                      # ~50 bits
+
 DB_PATH = os.environ.get(
     "HYRULELINK_DB",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "hyrulelink.db"),
@@ -118,12 +121,20 @@ def _q(sql, params=()):
 
 # ── rooms ────────────────────────────────────────────────────────────────
 def create_room(name: str, cooldown_s: float = 5.0) -> str:
-    code = secrets.token_hex(3).upper()       # 6-char private join code
-    pub_id = secrets.token_urlsafe(9)         # public watch handle (~12 chars)
-    now = time.time()
-    _q("INSERT INTO rooms(code, name, pub_id, host_player_id, cooldown_s, created_at, last_active) "
-       "VALUES (?,?,?,?,?,?,?)", (code, name, pub_id, None, cooldown_s, now, now))
-    return code
+    # This code is the room's join credential. Ten base32-like characters keep
+    # it typeable while making online guessing impractical. Retry the vanishingly
+    # unlikely collision instead of surfacing a database error.
+    for _ in range(8):
+        code = "".join(secrets.choice(ROOM_CODE_ALPHABET) for _ in range(ROOM_CODE_LENGTH))
+        pub_id = secrets.token_urlsafe(9)       # public watch handle (~12 chars)
+        now = time.time()
+        try:
+            _q("INSERT INTO rooms(code, name, pub_id, host_player_id, cooldown_s, created_at, last_active) "
+               "VALUES (?,?,?,?,?,?,?)", (code, name, pub_id, None, cooldown_s, now, now))
+            return code
+        except sqlite3.IntegrityError:
+            continue
+    raise RuntimeError("could not allocate a unique room code")
 
 
 def get_room(code: str):

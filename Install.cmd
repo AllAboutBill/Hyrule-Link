@@ -7,6 +7,9 @@ py -m venv .venv 2>nul || python -m venv .venv
 echo Installing dependencies (this can take a minute)...
 ".venv\Scripts\python.exe" -m pip install --quiet --upgrade pip
 ".venv\Scripts\python.exe" -m pip install --quiet -r requirements.txt
+echo Installing the optional SNI bridge...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "tools\install_sni.ps1"
+if errorlevel 1 echo WARNING: SNI could not be installed. Direct snes9x-nwa and RetroArch play still works.
 echo.
 echo Setup complete!  Host: run "Start Server.cmd".   Player: run "Play.cmd".
 pause

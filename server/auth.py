@@ -40,10 +40,11 @@ DISCORD_GUILD_ID = os.environ.get("DISCORD_GUILD_ID", "")
 MOD_ROLE_IDS = {r for r in os.environ.get("DISCORD_MOD_ROLE_IDS", "").split(",") if r.strip()}
 ADMIN_USER_IDS = {u for u in os.environ.get("DISCORD_ADMIN_USER_IDS", "").split(",") if u.strip()}
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
+TOKENS_ENABLED = len(SESSION_SECRET) >= 32
 
 # Login is only offered when fully configured.
 LOGIN_ENABLED = bool(DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET
-                     and DISCORD_REDIRECT_URI and SESSION_SECRET)
+                     and DISCORD_REDIRECT_URI and TOKENS_ENABLED)
 
 
 # ── signed tokens (cookies + oauth state) ───────────────────────────────────
@@ -56,12 +57,18 @@ def _b64d(s: str) -> bytes:
 
 
 def sign(data: dict) -> str:
+    if not TOKENS_ENABLED:
+        raise RuntimeError("SESSION_SECRET must contain at least 32 characters")
     payload = _b64e(json.dumps(data, separators=(",", ":")).encode())
     sig = _b64e(hmac.new(SESSION_SECRET.encode(), payload.encode(), hashlib.sha256).digest())
     return f"{payload}.{sig}"
 
 
 def unsign(token: str):
+    # An empty HMAC key is public knowledge, so accepting tokens without a
+    # configured secret would let anyone mint an admin session.
+    if not TOKENS_ENABLED:
+        return None
     try:
         payload, sig = token.split(".", 1)
         expected = _b64e(hmac.new(SESSION_SECRET.encode(), payload.encode(), hashlib.sha256).digest())

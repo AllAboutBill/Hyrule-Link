@@ -324,6 +324,8 @@ function handleMsg(msg) {
     state.cooldown_s = msg.cooldown_s;
     state.mode = msg.mode || "normal";
     state.rules = msg.rules || null;
+    if (msg.rule_defaults) RULE_DEFAULTS = msg.rule_defaults;
+    if (msg.rule_presets) RULE_PRESETS = msg.rule_presets;
     state.claiming = msg.claiming !== undefined ? !!msg.claiming : (state.mode === "normal");
     state.rules_summary = msg.rules_summary || "";
     state.shuffle_s = msg.shuffle_s || 120;
@@ -453,21 +455,24 @@ function iconHtml(cat, e) {
 
 function cardHtml(cat, e) {
   const chips = adminChips(cat.key, e);
+  const rules = state.rules || {};
+  const canPlay = !state.spectator && state.you != null && state.claiming;
+  const policyAllows = HyruleLinkClaimPolicy.canClaim(e, rules, state.you);
   if (!e) {
     // undiscovered by anyone
+    const action = canPlay && policyAllows
+      ? `<button data-claim="${cat.key}">Claim</button>` : "";
     return `<div class="item undiscovered">
       <div class="item-head">${iconHtml(cat, null)}<div class="item-name">${escapeHtml(cat.name)}</div></div>
       <div class="item-sub">undiscovered</div>
+      ${action}
       ${chips}
     </div>`;
   }
   const mine = e.owner === state.you;
-  const discovered = e.discovered.includes(state.you);
   const cd = e.cooldown_remaining;
   const onCooldown = cd > 0.05;
   const cls = mine ? "mine" : (e.owner ? "owned" : "unowned");
-  // claiming requires the ruleset to allow it (real player, not watcher/admin)
-  const canPlay = !state.spectator && state.you != null && state.claiming;
   let action = "";
   if (mine && !state.claiming) {
     action = `<div class="held">✓ yours</div>`;
@@ -475,7 +480,9 @@ function cardHtml(cat, e) {
     action = "";                                 // watcher / admin / shuffle mode: read-only
   } else if (mine) {
     action = `<div class="held">✓ you hold this</div>`;
-  } else if (!discovered) {
+  } else if (e.locked) {
+    action = `<div class="item-sub held">🔒 secured</div>`;
+  } else if (!policyAllows) {
     action = `<div class="item-sub locked">find one to claim</div>`;
   } else if (onCooldown) {
     action = `<button disabled data-cd="${cat.key}">cooldown ${cd.toFixed(0)}s</button>`;
@@ -487,7 +494,7 @@ function cardHtml(cat, e) {
     holdTimer += `<div class="item-sub hold">⏱ ${fmtClock(e.hold_remaining)}</div>`;
   if (e.borrow_remaining != null)
     holdTimer += `<div class="item-sub hold">⏳ borrowed ${fmtClock(e.borrow_remaining)}</div>`;
-  if (e.locked)
+  if (e.locked && (!canPlay || mine))
     holdTimer += `<div class="item-sub held">🔒 secured</div>`;
   const owner = e.owner ? escapeHtml(e.owner_name || "?") : "unowned";
   const ownerP = e.owner ? state.players.find((p) => p.id === e.owner) : null;
@@ -587,14 +594,14 @@ $("admin-mode").addEventListener("change", () => {
 });
 
 // ── Custom ruleset modal ────────────────────────────────────────────────
-const RULE_DEFAULTS = {
+let RULE_DEFAULTS = {
   claiming: true, require_found_to_claim: true, open_season_scope: "owned",
   steal_cooldown_s: 5, cooldown_scope: "item", steal_back_lock_s: 0, steal_budget_per_min: 0,
   hold_limit_s: 0, hold_expiry: "next_finder", tenure_lock_s: 0, idle_release_s: 0,
   borrow_s: 0, borrow_revert: "prev_owner",
   auto_shuffle_s: 0, shuffle_scope: "all", shared_discovery: false,
 };
-const RULE_PRESETS = {
+let RULE_PRESETS = {
   normal: {},
   hot_potato: { claiming: false, hold_limit_s: 120, hold_expiry: "next_finder" },
   chaos: { claiming: false, auto_shuffle_s: 120, shuffle_scope: "all" },

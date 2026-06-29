@@ -10,7 +10,7 @@ Config (agent/config.json):
     "server_http": "http://localhost:5019",
     "server_ws":   "ws://localhost:5019/ws",
     "room": "ABC123",
-    "user_id": 1,
+    "player_id": 1,
     "player_token": "...",
     "transport": "emu",        # "emu" (Snes9x-NWA/RetroArch) or "hardware" (FXPak/SD2SNES via QUsb2Snes)
     "poll_interval": 1.0
@@ -115,7 +115,8 @@ def run(config_path=None):
         player_token=cfg["player_token"],
         poll_interval=float(cfg.get("poll_interval", 1.0)),
     )
-    logger.info("Room %s as user %s. Start your emulator + load your seed.", cfg["room"], cfg["user_id"])
+    logger.info("Room %s as player %s. Start your emulator + load your seed.",
+                cfg["room"], cfg.get("player_id", cfg.get("user_id")))
     agent.start()
     try:
         while True:

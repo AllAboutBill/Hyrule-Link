@@ -133,8 +133,22 @@ class HyruleAgent:
             # Suppress our own write so the poller doesn't re-broadcast it.
             with self._lock:
                 self._expected[BY_KEY[key].addr] = raw
+            self._send_applied(key, enable, True)
         except Exception as e:
             logger.warning("apply %s failed: %s", key, e)
+            self._send_applied(key, enable, False, str(e))
+
+    def _send_applied(self, key, enable, ok, error=None):
+        if not (self.ws and self._ws_ready.is_set()):
+            return
+        payload = {"type": P.APPLIED, "item": key,
+                   "action": "grant" if enable else "revoke", "ok": bool(ok)}
+        if error:
+            payload["error"] = error[:200]
+        try:
+            self.ws.send(json.dumps(payload))
+        except Exception as e:
+            logger.debug("apply acknowledgement failed: %s", e)
 
     # ── pickup detection poll loop ─────────────────────────────────────────
     def _send_pickup(self, key, level):

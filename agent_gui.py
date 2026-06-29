@@ -38,10 +38,11 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 from shared.items import item_image, ITEMS, BY_KEY   # local catalog (don't trust server's list)
+from shared.rules import DEFAULT_RULES as RULE_DEFAULTS, PRESET_OVERRIDES as RULE_PRESETS
 
 SETTINGS = os.path.join(HERE, "agent", "gui_settings.json")
 PUBLIC_SERVER = "https://hyrulelink.billogna.lol"   # default shared server
-SNI_DIR = os.path.join(HERE, "tools", "sni")        # bundled SNI bridge (MIT)
+SNI_DIR = os.path.join(HERE, "tools", "sni")        # installer-managed SNI bridge (MIT)
 ITEMS_DIR = os.path.join(HERE, "web", "items")      # item sprite PNGs (shared w/ web)
 ICON_PX = 30                                        # board item sprite size
 CARD_MIN_PX = 132                                   # min item-card width → column count
@@ -84,25 +85,7 @@ def _lighten(hexcol, amt=0.12):
     return "#%02x%02x%02x" % (f(r), f(g), f(b))
 
 
-# ── custom ruleset (mirrors server/ledger.py DEFAULT_RULES + presets) ────────
-RULE_DEFAULTS = {
-    "claiming": True, "require_found_to_claim": True, "open_season_scope": "owned",
-    "steal_cooldown_s": 5, "cooldown_scope": "item", "steal_back_lock_s": 0, "steal_budget_per_min": 0,
-    "hold_limit_s": 0, "hold_expiry": "next_finder", "tenure_lock_s": 0, "idle_release_s": 0,
-    "borrow_s": 0, "borrow_revert": "prev_owner",
-    "auto_shuffle_s": 0, "shuffle_scope": "all", "shared_discovery": False,
-}
-RULE_PRESETS = {
-    "normal": {},
-    "hot_potato": {"claiming": False, "hold_limit_s": 120, "hold_expiry": "next_finder"},
-    "chaos": {"claiming": False, "auto_shuffle_s": 120, "shuffle_scope": "all"},
-    "cutthroat": {"require_found_to_claim": False, "open_season_scope": "owned",
-                  "cooldown_scope": "thief", "steal_cooldown_s": 20,
-                  "steal_budget_per_min": 3, "steal_back_lock_s": 30},
-    "lease": {"claiming": True, "hold_limit_s": 300, "hold_expiry": "release"},
-    "raid": {"require_found_to_claim": False, "borrow_s": 120, "borrow_revert": "prev_owner"},
-    "siege": {"claiming": True, "tenure_lock_s": 240},
-}
+# ── custom ruleset editor metadata ──────────────────────────────────────────
 # (section title, [(key, kind, label, [enum choices])])
 RULE_FIELDS = [
     ("Claiming & stealing", [
@@ -319,7 +302,7 @@ class App(tk.Tk):
         self.me = None              # {name, avatar, admin} when logged in
         self.login_q = queue.Queue()  # device-login results from the poll thread
         self.local_server = None    # subprocess if hosting a server on this PC
-        self.sni_proc = None        # bundled SNI bridge, only if WE started it
+        self.sni_proc = None        # installed SNI bridge, only if WE started it
         self.tunnel_proc = None     # cloudflared subprocess (optional public link)
         self.tunnel_url = None
         self.tunnel_q = queue.Queue()
@@ -1511,10 +1494,19 @@ class App(tk.Tk):
 
         mode = self.state.get("mode", "normal")
         claiming = self.state.get("claiming", mode == "normal")
-        need_found = self.state.get("rules", {}).get("require_found_to_claim", True)
+        rules = self.state.get("rules", {})
+        need_found = rules.get("require_found_to_claim", True)
+        shared_found = bool(e and rules.get("shared_discovery") and e.get("discovered"))
+        found_for_claim = bool(e and (you in e.get("discovered", []) or shared_found))
+        open_scope = rules.get("open_season_scope", "owned")
         action = tk.Frame(card, bg=PANEL); action.pack(pady=(1, 4))
         if not e:
-            tk.Label(action, text="—", fg=MUTED, bg=PANEL, font=("Segoe UI", 8)).pack()
+            if claiming and not need_found and open_scope == "any":
+                self._button(action, "Claim",
+                             lambda k=cat["key"]: self._ui_send({"type": "claim", "item": k}),
+                             small=True).pack()
+            else:
+                tk.Label(action, text="—", fg=MUTED, bg=PANEL, font=("Segoe UI", 8)).pack()
         elif not claiming:
             # no manual claiming — just show ownership
             if mine:
@@ -1527,7 +1519,9 @@ class App(tk.Tk):
                      font=("Segoe UI Semibold", 9)).pack()
         elif e.get("locked"):
             tk.Label(action, text="🔒 secured", fg=GOLD, bg=PANEL, font=("Segoe UI", 8)).pack()
-        elif need_found and you not in e.get("discovered", []):
+        elif ((need_found and not found_for_claim)
+              or (not need_found and open_scope == "owned"
+                  and not e.get("owner") and not found_for_claim)):
             tk.Label(action, text="find one to claim", fg=GOLD, bg=PANEL,
                      font=("Segoe UI", 8)).pack()
         elif e.get("cooldown_remaining", 0) > 0.05:
@@ -1591,7 +1585,7 @@ class App(tk.Tk):
                  justify="left").pack(anchor="w", padx=16)
         self._button(win, "Got it", win.destroy, primary=True).pack(anchor="w", padx=16, pady=12)
 
-    # ── bundled SNI bridge (snes9x-rr / BizHawk / real hardware) ────────────
+    # ── installed SNI bridge (snes9x-rr / BizHawk / real hardware) ──────────
     def _sni_exe(self):
         import shutil
         bundled = os.path.join(SNI_DIR, "sni.exe")
@@ -1628,8 +1622,8 @@ class App(tk.Tk):
     def _use_sni(self):
         status = self._start_sni()
         if status == "missing":
-            messagebox.showwarning("HyruleLink", "Couldn't find the bundled SNI. Install/run "
-                                   "SNI or QUsb2Snes manually, then press Connect & Play.")
+            messagebox.showwarning("HyruleLink", "Couldn't find the installed SNI. Run Install.cmd, "
+                                   "or run SNI/QUsb2Snes manually, then press Connect & Play.")
             return False
         self._show_connector_help(status == "already")
         return True

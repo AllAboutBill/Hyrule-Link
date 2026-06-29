@@ -9,6 +9,8 @@ so every remote player can reach it.
 """
 
 import asyncio
+import logging
+import math
 import os
 import time
 
@@ -37,7 +39,8 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, HTML
 from fastapi.staticfiles import StaticFiles
 
 from server import db, auth, names
-from server.ledger import hub, resolve_pickup, resolve_claim
+from server.rate_limit import RateLimiter, client_key
+from server.ledger import hub, resolve_pickup, resolve_claim, ownership_commands
 from shared import protocol as P
 from shared.items import ITEMS, item_image
 
@@ -45,9 +48,22 @@ WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 app = FastAPI(title="HyruleLink")
 db.init()
+logger = logging.getLogger("HyruleLink.server")
 
 # Rooms idle longer than this are auto-deleted (with their players/ledger).
 ROOM_TTL_DAYS = float(os.environ.get("HYRULELINK_ROOM_TTL_DAYS", "14"))
+_CREATE_LIMIT = RateLimiter(10, 60)
+_JOIN_LIMIT = RateLimiter(20, 60)
+_DEVICE_LIMIT = RateLimiter(10, 60)
+
+
+def _rate_limit(request: Request, limiter: RateLimiter, action: str):
+    if not limiter.allow(f"{action}:{client_key(request)}"):
+        raise HTTPException(429, "too many requests — wait a minute and try again")
+
+
+def _display_name(value) -> str:
+    return (str(value or "Player").strip() or "Player")[:40]
 
 
 def _session_from_request(request: Request):
@@ -79,6 +95,8 @@ def _prune_rooms():
         hub.rooms.pop(c, None)
         hub.agents.pop(c, None)
         hub.uis.pop(c, None)
+        hub.admin_uis.pop(c, None)
+        hub.apply_failures.pop(c, None)
     if codes:
         print(f"[cleanup] pruned {len(codes)} idle room(s): {', '.join(codes)}")
 
@@ -96,7 +114,7 @@ async def _shuffle_loop():
         try:
             await hub.tick_shuffles()
         except Exception:
-            pass
+            logger.exception("time-based rule loop failed")
 
 
 async def _prune_loop():
@@ -105,7 +123,7 @@ async def _prune_loop():
         try:
             _prune_rooms()
         except Exception:
-            pass
+            logger.exception("room prune failed")
 
 
 # ── Discord login ───────────────────────────────────────────────────────────
@@ -157,6 +175,7 @@ def auth_logout():
 def device_start(request: Request):
     if not auth.LOGIN_ENABLED:
         raise HTTPException(404, "discord login not configured")
+    _rate_limit(request, _DEVICE_LIMIT, "device-login")
     _pairings_gc()
     pair = auth.new_pairing_id()
     _PAIRINGS[pair] = {"token": None, "exp": time.time() + _PAIR_TTL}
@@ -217,10 +236,17 @@ def _identity(request: Request):
 
 @app.post("/api/rooms")
 def create_room(request: Request, payload: dict = Body(...)):
+    _rate_limit(request, _CREATE_LIMIT, "create-room")
     # silly auto-name unless the client supplied a real one (the host can rename)
-    name = (payload.get("name") or "").strip() or names.random_room_name()
-    cooldown = float(payload.get("cooldown_s", 5))
-    display = (payload.get("display_name") or "Player").strip()
+    name = (str(payload.get("name") or "").strip() or names.random_room_name())[:60]
+    try:
+        cooldown = float(payload.get("cooldown_s", 5))
+    except (TypeError, ValueError):
+        raise HTTPException(422, "cooldown_s must be a number")
+    if not math.isfinite(cooldown):
+        raise HTTPException(422, "cooldown_s must be finite")
+    cooldown = max(0.0, min(3600.0, cooldown))
+    display = _display_name(payload.get("display_name"))
     discord_id, avatar = _identity(request)
     code = db.create_room(name, cooldown)
     player_id, token = db.add_player(code, display, discord_id, avatar)
@@ -230,10 +256,11 @@ def create_room(request: Request, payload: dict = Body(...)):
 
 @app.post("/api/rooms/{code}/join")
 def join_room(code: str, request: Request, payload: dict = Body(...)):
+    _rate_limit(request, _JOIN_LIMIT, "join-room")
     code = code.upper()
     if not db.get_room(code):
         raise HTTPException(404, "no such room")
-    display = (payload.get("display_name") or "Player").strip()
+    display = _display_name(payload.get("display_name"))
     # a logged-in user who's already in this room rejoins their existing player
     # (keeps items) instead of piling up duplicates.
     discord_id, avatar = _identity(request)
@@ -276,9 +303,10 @@ def rejoin_room(code: str, request: Request):
 
 
 @app.post("/api/rooms/{code}/resume")
-def resume_room(code: str, payload: dict = Body(...)):
+def resume_room(code: str, request: Request, payload: dict = Body(...)):
     """Re-enter a room as an EXISTING player (keeps owned items) instead of
     creating a duplicate. The client passes back its saved player_id+token."""
+    _rate_limit(request, _JOIN_LIMIT, "resume-room")
     code = code.upper()
     if not db.get_room(code):
         raise HTTPException(404, "no such room")
@@ -371,11 +399,10 @@ async def _push_ownership(ws, code, user_id):
     used on agent connect AND on a resync request (e.g. after an emulator crash
     + save reload)."""
     room = hub.rooms[code]
-    for key, it in room.items.items():
-        if it.owner == user_id and it.level > 0:
-            await ws.send_json({"type": P.GRANT, "item": key, "level": it.level})
-        elif it.owner not in (None, user_id):
-            await ws.send_json({"type": P.REVOKE, "item": key})
+    # Send every catalog item. This is intentionally exhaustive: an item that
+    # is unowned (or absent from the ledger) must be removed from a stale save.
+    for command in ownership_commands(room, user_id):
+        await ws.send_json(command)
 
 
 async def _serve_agent(ws, code, user_id):
@@ -387,7 +414,7 @@ async def _serve_agent(ws, code, user_id):
         msg = await ws.receive_json()
         mtype = msg.get("type")
         if mtype == P.PICKUP:
-            eff = resolve_pickup(room, user_id, msg.get("item"), int(msg.get("level", 1)))
+            eff = resolve_pickup(room, user_id, msg.get("item"), msg.get("level", 1))
             if eff.reject:
                 await ws.send_json({"type": P.REJECT, "reason": eff.reject})
             else:
@@ -397,9 +424,10 @@ async def _serve_agent(ws, code, user_id):
         elif mtype == P.STATUS:
             hub.set_emu_status(code, user_id, msg.get("emu", False))
             await hub.broadcast_state(code)
+        elif mtype == P.APPLIED:
+            await hub.report_applied(code, user_id, msg)
         elif mtype == P.BYE:
             break
-        # APPLIED acks are informational; ignored for now.
 
 
 async def _serve_ui(ws, code, user_id, is_admin=False):

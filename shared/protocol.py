@@ -9,7 +9,7 @@ NAT / for remote play). The server is the single source of truth for ownership.
 agent  -> server
   hello     {type, role:"agent", room, player_id, token, platform}
   pickup    {type, item, level}      # player found `item` (raw level) in-world
-  applied   {type, item, ok}         # ack of a grant/revoke write
+  applied   {type, item, action, ok, error?}  # verified grant/revoke result
   bye       {type}
 
 ui     -> server

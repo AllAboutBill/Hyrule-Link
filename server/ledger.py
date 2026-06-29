@@ -17,14 +17,19 @@ Rules (locked with the user):
 """
 
 import json
+import logging
+import math
 import random
 import time
 from dataclasses import dataclass, field
 from typing import Dict, Optional, List, Tuple
 
-from shared.items import BY_KEY, tier_label, item_image
+from shared.items import ITEMS, BY_KEY, tier_label, item_image
 from shared import protocol as P
+from shared.rules import DEFAULT_RULES, PRESET_OVERRIDES
 from server import db
+
+logger = logging.getLogger("HyruleLink.ledger")
 
 # Game modes. "normal" = claim/find as usual. The shuffle modes auto-rotate
 # ownership and disable manual claiming.
@@ -41,28 +46,6 @@ MODE_LABELS = {MODE_NORMAL: "Normal", MODE_HOT_POTATO: "Hot Potato",
 # The whole game is one rule engine; the named modes are just presets. A room
 # always carries a full effective ruleset (room.rules); resolve_claim and the
 # 1-second tick read it. See the design spec for what each knob does.
-DEFAULT_RULES = {
-    # A. claiming & stealing
-    "claiming":               True,
-    "require_found_to_claim": True,
-    "open_season_scope":      "owned",      # owned | any  (when found-gate is off)
-    "steal_cooldown_s":       5.0,
-    "cooldown_scope":         "item",       # item | thief | victim | none
-    "steal_back_lock_s":      0.0,
-    "steal_budget_per_min":   0,            # 0 = unlimited
-    # B. holding / leases
-    "hold_limit_s":           0.0,          # 0 = off
-    "hold_expiry":            "next_finder",# next_finder | release | return_finder
-    "tenure_lock_s":          0.0,          # 0 = off
-    "idle_release_s":         0.0,          # 0 = off
-    # C. raid (unfound steals)
-    "borrow_s":               0.0,          # 0 = permanent
-    "borrow_revert":          "prev_owner", # prev_owner | pool
-    # D. stackable layers
-    "auto_shuffle_s":         0.0,          # 0 = off (can run WITH claiming)
-    "shuffle_scope":          "all",        # all | unowned | idle
-    "shared_discovery":       False,
-}
 _RULE_BOOLS = ("claiming", "require_found_to_claim", "shared_discovery")
 _RULE_ENUMS = {
     "open_season_scope": ("owned", "any"),
@@ -95,6 +78,8 @@ def clamp_rules(raw: dict) -> dict:
         if k in raw:
             try:
                 v = int(raw[k]) if k == "steal_budget_per_min" else float(raw[k])
+                if not math.isfinite(v):
+                    continue
                 out[k] = max(lo, min(hi, v))
             except (TypeError, ValueError):
                 pass
@@ -108,13 +93,16 @@ def preset_rules(mode: str, seconds=None) -> dict:
     """The full ruleset a named preset resolves to (interval from `seconds`)."""
     r = dict(DEFAULT_RULES)
     try:
-        s = max(5.0, float(seconds)) if seconds else None
+        raw_s = float(seconds) if seconds else None
+        s = max(5.0, min(86400.0, raw_s)) if raw_s is not None and math.isfinite(raw_s) else None
     except (TypeError, ValueError):
         s = None
     if mode == MODE_HOT_POTATO:
-        r.update(claiming=False, hold_limit_s=(s or 120.0), hold_expiry="next_finder")
+        r.update(PRESET_OVERRIDES[MODE_HOT_POTATO])
+        r["hold_limit_s"] = s or 120.0
     elif mode == MODE_CHAOS:
-        r.update(claiming=False, auto_shuffle_s=(s or 120.0), shuffle_scope="all")
+        r.update(PRESET_OVERRIDES[MODE_CHAOS])
+        r["auto_shuffle_s"] = s or 120.0
     return r
 
 
@@ -209,6 +197,13 @@ def resolve_pickup(room: RoomState, user_id: int, key: str, level: int) -> Effec
     item = BY_KEY.get(key)
     if item is None:
         return Effects(reject=f"unknown item {key}")
+    try:
+        level = int(level)
+    except (TypeError, ValueError):
+        return Effects(reject=f"invalid level for {item.name}")
+    if level < item.present:
+        return Effects(reject=f"invalid level for {item.name}")
+    level = min(level, item.cap)
     now = time.time()
     it = room.items.setdefault(key, ItemState())
     first_seen = user_id not in it.discovered
@@ -323,6 +318,18 @@ def resolve_claim(room: RoomState, user_id: int, key: str) -> Effects:
     return eff
 
 
+def ownership_commands(room: RoomState, user_id: int) -> List[dict]:
+    """Build an exhaustive reconciliation set for one player's game."""
+    commands = []
+    for item in ITEMS:
+        it = room.items.get(item.key)
+        if it and it.owner == user_id and it.level > 0:
+            commands.append({"type": P.GRANT, "item": item.key, "level": it.level})
+        else:
+            commands.append({"type": P.REVOKE, "item": item.key})
+    return commands
+
+
 # ── live hub: connections + persistence + dispatch ─────────────────────────
 class RoomHub:
     def __init__(self):
@@ -330,6 +337,7 @@ class RoomHub:
         self.agents: Dict[str, Dict[int, object]] = {}   # code -> {user_id: ws}
         self.uis: Dict[str, Dict[object, int]] = {}      # code -> {ws: user_id|None}
         self.admin_uis: Dict[str, set] = {}              # code -> {ws} granted global-admin
+        self.apply_failures: Dict[str, set] = {}         # code -> {(user_id, item)}
 
     # -- room loading --------------------------------------------------------
     def get_room(self, code: str) -> Optional[RoomState]:
@@ -502,6 +510,8 @@ class RoomHub:
             "host": room.host,
             "mode": room.mode,
             "rules": R,
+            "rule_defaults": DEFAULT_RULES,
+            "rule_presets": PRESET_OVERRIDES,
             "claiming": bool(R.get("claiming")),
             "rules_summary": summarize_rules(R),
             "shuffle_s": room.shuffle_s,
@@ -533,10 +543,35 @@ class RoomHub:
         for ws in list(self.uis.get(code, {}).keys()):
             await self._send(ws, payload)
 
+    async def report_applied(self, code: str, user_id: int, msg: dict):
+        """Record agent write failures and surface each failure once to the room."""
+        key = msg.get("item")
+        marker = (user_id, key)
+        failures = self.apply_failures.setdefault(code, set())
+        if msg.get("ok") is True:
+            failures.discard(marker)
+            return
+        if marker in failures:
+            return
+        failures.add(marker)
+        room = self.rooms.get(code)
+        if room and key in BY_KEY:
+            name = room.names.get(user_id, f"player {user_id}")
+            logger.warning("agent write failed room=%s player=%s item=%s: %s",
+                           code, user_id, key, msg.get("error", "unknown error"))
+            await self.broadcast_event(
+                code, f"⚠ {name}'s game could not apply {BY_KEY[key].name}; reconnecting will retry")
+
     # -- host admin actions (caller must verify user == room.host) -----------
     async def admin_set_cooldown(self, code: str, seconds: float):
         room = self.rooms[code]
-        room.cooldown_s = max(0.0, float(seconds))
+        try:
+            value = float(seconds)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(value):
+            return
+        room.cooldown_s = max(0.0, min(3600.0, value))
         room.rules["steal_cooldown_s"] = room.cooldown_s
         db.update_cooldown(code, room.cooldown_s)
         db.update_rules(code, json.dumps(room.rules))
@@ -604,7 +639,7 @@ class RoomHub:
         """Force an item's owner (player_id) or clear it (player_id None)."""
         room = self.rooms[code]
         item = BY_KEY.get(key)
-        if not item:
+        if not item or (player_id is not None and player_id not in room.names):
             return
         it = room.items.setdefault(key, ItemState())
         prev = it.owner
@@ -627,7 +662,7 @@ class RoomHub:
 
     async def admin_set_name(self, code: str, name: str):
         room = self.rooms.get(code)
-        name = (name or "").strip()[:60]
+        name = str(name or "").strip()[:60]
         if room is None or not name:
             return
         room.name = name
@@ -643,7 +678,9 @@ class RoomHub:
         room.mode = mode if mode in (MODE_NORMAL, MODE_HOT_POTATO, MODE_CHAOS) else MODE_NORMAL
         if seconds:
             try:
-                room.shuffle_s = max(5.0, float(seconds))
+                value = float(seconds)
+                if math.isfinite(value):
+                    room.shuffle_s = max(5.0, min(86400.0, value))
             except (TypeError, ValueError):
                 pass
         # a preset is just a ruleset; rebuild it (keeping the host's steal cooldown)
@@ -721,7 +758,7 @@ class RoomHub:
             try:
                 await self._tick_room(code, room, now)
             except Exception:
-                pass
+                logger.exception("time-based rules failed for room %s", code)
 
     async def _tick_room(self, code, room, now):
         R = room.rules
@@ -859,6 +896,7 @@ class RoomHub:
         self.agents.pop(code, None)
         self.uis.pop(code, None)
         self.admin_uis.pop(code, None)
+        self.apply_failures.pop(code, None)
 
 
 hub = RoomHub()

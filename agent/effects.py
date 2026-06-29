@@ -22,7 +22,16 @@ class Effects:
 
     def _read(self, addr) -> int:
         d = self.t.read_memory(addr, size=1)
-        return int(d[0]) if d and len(d) >= 1 else 0
+        if not d or len(d) < 1:
+            raise IOError(f"could not read WRAM ${addr:04X}")
+        return int(d[0])
+
+    @staticmethod
+    def _matches(item, raw: int, level: int, enable: bool) -> bool:
+        if item.kind == "bitfield":
+            return bool(raw & item.mask) == enable
+        expected = (level if item.kind == "progressive" else item.give) if enable else 0
+        return raw == expected
 
     def enable(self, key: str, level: int) -> int:
         item = BY_KEY[key]
@@ -36,7 +45,10 @@ class Effects:
             self.mgr.add(item.effect_key)
         else:  # simple single-byte
             self.mgr.add(key)
-        return self._read(item.addr)
+        raw = self._read(item.addr)
+        if not self._matches(item, raw, level, True):
+            raise IOError(f"grant verification failed for {key}: read {raw}")
+        return raw
 
     def disable(self, key: str) -> int:
         item = BY_KEY[key]
@@ -48,4 +60,7 @@ class Effects:
             self.mgr.remove(item.effect_key)
         else:
             self.mgr.remove(key)
-        return self._read(item.addr)
+        raw = self._read(item.addr)
+        if not self._matches(item, raw, 0, False):
+            raise IOError(f"revoke verification failed for {key}: read {raw}")
+        return raw

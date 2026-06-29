@@ -149,7 +149,7 @@ duplicate.
 > - **snes9x-nwa** (EmuNetworkAccess build) — direct, nothing extra.
 > - **RetroArch** (any SNES core) — the app enables the network setting for you.
 > - **snes9x-rr, BizHawk, real hardware (SD2SNES/FXPak), and more** — via the
->   **SNI bridge, which is bundled**. Click **Start SNI** in the app (or just say
+>   **SNI bridge, installed by `Install.cmd`**. Click **Start SNI** in the app (or just say
 >   Yes when Connect & Play offers it). Real hardware then connects with nothing
 >   else to do; for snes9x-rr/BizHawk the app points you at the `Connector.lua`
 >   to load in the emulator. If you already run SNI/QUsb2Snes, it uses that one.
@@ -158,8 +158,9 @@ duplicate.
 >
 > In the app, **"Which emulators?"** explains all of this.
 
-Bundled third-party tools (in `tools/`): **SNI** (MIT, `tools/sni/`) and
-**cloudflared** (Apache-2.0) — both auto-launched only on demand.
+Third-party tools live under `tools/`: **SNI** (MIT) is downloaded from its
+pinned upstream release by `Install.cmd` with SHA-256 verification, and
+**cloudflared** (Apache-2.0) downloads on first use. Both launch only on demand.
 
 ## Advanced / manual (any OS, terminal)
 
@@ -196,7 +197,7 @@ reported automatically; grants/revokes are written into your game live.
   "server_http": "http://YOUR_SERVER:5019",
   "server_ws":   "ws://YOUR_SERVER:5019/ws",
   "room": "ABC123",
-  "user_id": 1,
+  "player_id": 1,
   "player_token": "…",
   "transport": "emu",
   "poll_interval": 1.0
