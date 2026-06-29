@@ -39,6 +39,10 @@ if HERE not in sys.path:
 
 from shared.items import item_image, ITEMS, BY_KEY   # local catalog (don't trust server's list)
 from shared.rules import DEFAULT_RULES as RULE_DEFAULTS, PRESET_OVERRIDES as RULE_PRESETS
+# Emulator discovery (which sources are open + auto-detect) — shares its probe
+# ports/handshakes with the transport in agent.sni.emu_connector, so the two
+# can't drift apart.
+from agent.sni.discovery import scan_emulators, detect_emulator, SNI_BRIDGE_PORT
 
 SETTINGS = os.path.join(HERE, "agent", "gui_settings.json")
 PUBLIC_SERVER = "https://hyrulelink.billogna.lol"   # default shared server
@@ -98,54 +102,6 @@ DEFAULT_PATCH = {"heartspeed": "half", "heartcolor": "red", "menu_speed": "insta
 HEARTSPEEDS = ["off", "quarter", "half", "normal", "double"]
 HEARTCOLORS = ["red", "blue", "green", "yellow"]
 MENU_SPEEDS = ["instant", "fast", "normal", "slow"]
-
-# Ports probed when enumerating open emulators for the picker. 48879 (0xBEEF) is
-# snes9x-emunwa; 65400+ is the NWA draft default range; mirror emu_connector.
-NWA_SCAN_PORTS = [48879] + list(range(65400, 65404))
-
-
-def scan_emulators():
-    """Enumerate every SNES memory source reachable on localhost right now.
-
-    Returns a list of {"label", "bind"} where `bind` is what _connect() needs:
-      {"transport": "emu", "source": "nwa"|"retroarch", "port": <int|None>}  or
-      {"transport": "hardware"}  (a QUsb2Snes/SNI bridge).
-    Lets the player see which emulators are open and pin one — handy when two run
-    on one PC (e.g. two snes9x-nwa instances on different ports for local testing).
-    """
-    found = []
-    for p in NWA_SCAN_PORTS:                 # snes9x-nwa / other EmuNWA emulators
-        try:
-            s = socket.create_connection(("127.0.0.1", p), timeout=0.25)
-            s.sendall(b"EMULATOR_INFO\n")
-            reply = s.recv(256).decode(errors="replace"); s.close()
-            name = next((ln.split(":", 1)[1].strip() for ln in reply.splitlines()
-                         if ln.lower().startswith("name:")), "snes9x-nwa")
-            found.append({"label": f"{name} @{p}",
-                          "bind": {"transport": "emu", "source": "nwa", "port": p}})
-        except OSError:
-            continue
-    try:                                     # RetroArch (UDP network commands)
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(0.4)
-        s.sendto(b"VERSION\n", ("127.0.0.1", 55355))
-        ver = s.recvfrom(128)[0].decode(errors="replace").strip(); s.close()
-        found.append({"label": f"RetroArch {ver}".strip(),
-                      "bind": {"transport": "emu", "source": "retroarch", "port": None}})
-    except OSError:
-        pass
-    for port in (23074, 8080):               # QUsb2Snes/SNI bridge (hardware + others)
-        try:
-            w = websocket.create_connection(f"ws://127.0.0.1:{port}", timeout=0.6)
-            w.send(json.dumps({"Opcode": "DeviceList", "Space": "SNES"}))
-            devices = json.loads(w.recv()).get("Results", []); w.close()
-            found.append({"label": f"SNI bridge — {devices[0]}" if devices
-                          else "SNI bridge (no device yet)",
-                          "bind": {"transport": "hardware"}})
-            break
-        except Exception:
-            continue
-    return found
-
 
 # palette — billogna.lol's "aurora" design language (see README "Web UI style").
 # mint / violet / blue over near-black; no pink. Tk can't render the web's
@@ -297,54 +253,6 @@ def http_get(base, path, headers=None):
             return json.loads(r.read().decode()), None
     except Exception as e:
         return None, str(e)
-
-
-def detect_emulator():
-    """Find whatever SNES memory source is reachable locally.
-
-    Returns (transport, emu_source, label):
-      transport "emu"      -> direct EmuConnector (emu_source "nwa"/"retroarch")
-      transport "hardware" -> QUsb2Snes/SNI bridge (snes9x-rr, BizHawk, FXPak…)
-
-    Priority:
-      1. A QUsb2Snes/SNI bridge that ALREADY has a device attached — join it, so
-         we coexist with trackers / crowd-control sharing that bridge instead of
-         opening a competing direct connection.
-      2. Otherwise pick a direct source: snes9x-nwa preferred, then RetroArch.
-      3. A bridge that's running but has no device yet (just a hint).
-    """
-    # 1. existing bridge that's actively managing a device -> join it
-    bridge_hint = None
-    for port in (23074, 8080):   # 23074 = usb2snes/SNI default; 8080 legacy
-        try:
-            w = websocket.create_connection(f"ws://127.0.0.1:{port}", timeout=0.8)
-            w.send(json.dumps({"Opcode": "DeviceList", "Space": "SNES"}))
-            devices = json.loads(w.recv()).get("Results", [])
-            w.close()
-            if devices:
-                return ("hardware", None, f"QUsb2Snes/SNI — {devices[0]}")
-            bridge_hint = "QUsb2Snes/SNI — attach your emulator to it"
-            break
-        except Exception:
-            continue
-    # 2. direct sources (only chosen when no shared bridge owns a device);
-    #    snes9x-nwa preferred over RetroArch.
-    try:
-        s = socket.create_connection(("127.0.0.1", 48879), timeout=0.4)
-        s.sendall(b"EMULATOR_INFO\n"); s.recv(64); s.close()
-        return ("emu", "nwa", "snes9x (EmuNetworkAccess)")
-    except OSError:
-        pass
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(0.5)
-        s.sendto(b"VERSION\n", ("127.0.0.1", 55355)); s.recvfrom(64); s.close()
-        return ("emu", "retroarch", "RetroArch")
-    except OSError:
-        pass
-    # 3. bridge running but idle
-    if bridge_hint:
-        return ("hardware", None, bridge_hint)
-    return ("emu", None, "not detected")
 
 
 class QueueLogHandler(logging.Handler):
@@ -1838,9 +1746,9 @@ class App(tk.Tk):
         return shutil.which("sni") or (r"C:\SNI\sni.exe" if os.path.exists(r"C:\SNI\sni.exe") else None)
 
     def _bridge_running(self):
-        """Is a QUsb2Snes/SNI bridge already listening on 23074?"""
+        """Is a QUsb2Snes/SNI bridge already listening on the default port?"""
         try:
-            socket.create_connection(("127.0.0.1", 23074), timeout=0.4).close()
+            socket.create_connection(("127.0.0.1", SNI_BRIDGE_PORT), timeout=0.4).close()
             return True
         except OSError:
             return False
