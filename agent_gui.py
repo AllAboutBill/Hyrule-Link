@@ -62,10 +62,26 @@ OPEN_SEED_SETTINGS = {
 # mint / violet / blue over near-black; no pink. Tk can't render the web's
 # translucent "glass" or backdrop blur, so the rgba() card/border tokens are
 # flattened to the solid colours they resolve to over the near-black background.
-BG = "#070709"; PANEL = "#15131d"; PANEL2 = "#211f2d"; INK = "#e8e6f0"; MUTED = "#8f8da3"
-GOLD = "#ffd700"; GREEN = "#b3ffc8"; RED = "#ff6b7a"; BLUE = "#5eadff"; LINE = "#2a2838"
-ACCENT = "#b3ffc8"; ACCENT2 = "#8a6bff"   # mint (primary) / violet (secondary) accents
-# Note: GREEN==ACCENT (mint) and BLUE map the web's --green/--accent and --cyan
+# Violet on neutral charcoal — surfaces are de-saturated (no blue cast) so the
+# violet accent reads as a deliberate pop instead of a sea of blue. Blue is
+# reserved for "owned by someone else", aqua for "you/online", gold for "owner".
+BG = "#0d0d10"; PANEL = "#17171c"; PANEL2 = "#232229"; FIELD = "#1c1b22"
+INK = "#f1eff5"; MUTED = "#a4a0ad"; DIM = "#56535e"; EDGE_HI = "#343139"   # lit top edge
+GOLD = "#ffd700"; GREEN = "#a87dff"; RED = "#ff6b7a"; BLUE = "#6cb8ff"; LINE = "#302e38"
+ACCENT = "#bcaaff"                              # brand violet (headings, focus ring)
+PRIMARY = "#7c5cff"; PRIMARY_HI = "#9277ff"     # primary button fill / hover (white text)
+ACCENT2 = "#c084fc"                             # chaos / secondary accent
+# Note: GREEN now holds a purple "you/mine/online/success" tone (kept the name to
+# limit churn) — so owned-by-you reads in the brand family, not mint. BLUE stays
+# "owned by someone else", so the two ownership states remain distinct.
+
+
+def _lighten(hexcol, amt=0.12):
+    """Blend a hex colour toward white by `amt` — used for button hover states."""
+    h = hexcol.lstrip("#")
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    f = lambda c: max(0, min(255, int(c + (255 - c) * amt)))
+    return "#%02x%02x%02x" % (f(r), f(g), f(b))
 # states; "mine" reads mint, "owned by another" reads blue, "owner/host" stays gold.
 
 
@@ -210,6 +226,7 @@ class App(tk.Tk):
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         self.geometry(f"{min(1180, sw - 80)}x{min(900, sh - 80)}")
         self.minsize(720, 560)
+        self._enable_dark_titlebar()  # dark native title bar to match the app
         self._board_cols = 0          # current item-grid column count (responsive)
 
         self.cfg = load_settings()
@@ -271,6 +288,24 @@ class App(tk.Tk):
             self._stop_all.wait(1.5)
 
     # ── chrome ──────────────────────────────────────────────────────────────
+    def _enable_dark_titlebar(self):
+        """Windows 10/11: paint the native title bar dark so it matches the app
+        instead of the default white. No-op (and harmless) elsewhere."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            self.update_idletasks()
+            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+            value = ctypes.c_int(1)
+            for attr in (20, 19):     # DWMWA_USE_IMMERSIVE_DARK_MODE: 20 (20H1+), 19 (older)
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, attr, ctypes.byref(value), ctypes.sizeof(value))
+            # nudge a repaint so the bar flips immediately rather than on first focus
+            self.withdraw(); self.deiconify()
+        except Exception:
+            pass
+
     def _build_chrome(self):
         # Header is a live pixel-field banner — the closest Tk can get to the
         # site's nexus-bg.js field (widgets are opaque, so the field can only sit
@@ -310,26 +345,62 @@ class App(tk.Tk):
             w.destroy()
 
     def _entry(self, parent, show=None, value=""):
-        e = tk.Entry(parent, show=show, bg=PANEL, fg=INK, insertbackground=INK,
+        e = tk.Entry(parent, show=show, bg=FIELD, fg=INK, insertbackground=ACCENT,
                      relief="flat", font=("Segoe UI", 11))
         e.insert(0, value)
         e.configure(highlightthickness=1, highlightbackground=LINE, highlightcolor=ACCENT)
         return e
 
     def _button(self, parent, text, cmd, primary=False, small=False):
-        # primary CTAs are filled mint with near-black ink (the web's "lean mint"
-        # CTAs); on hover they brighten rather than switch hue. Mint is too light
-        # for white text, so primary foreground is the near-black bg colour.
-        return tk.Button(parent, text=text, command=cmd, relief="flat", cursor="hand2",
-                         bg=ACCENT if primary else PANEL2, fg=BG if primary else INK,
-                         activebackground="#c9ffd8" if primary else LINE,
-                         activeforeground=BG if primary else INK,
-                         font=("Segoe UI Semibold", 9 if small else 11), bd=0,
-                         padx=10 if small else 14, pady=4 if small else 8)
+        # primary CTAs are filled violet with white text; secondary buttons are a
+        # raised slate chip with a hairline border. Both lift (lighten) on hover —
+        # the hover reads the *current* bg, so it stays correct even when a button
+        # is later recoloured (e.g. the Connect/Disconnect toggle).
+        base = PRIMARY if primary else PANEL2
+        b = tk.Button(parent, text=text, command=cmd, relief="flat", cursor="hand2",
+                      bg=base, fg="#ffffff" if primary else INK,
+                      activebackground=PRIMARY_HI if primary else LINE,
+                      activeforeground="#ffffff" if primary else INK,
+                      font=("Segoe UI Semibold", 9 if small else 11),
+                      bd=0, highlightthickness=1,
+                      highlightbackground=PRIMARY_HI if primary else LINE,
+                      highlightcolor=PRIMARY_HI if primary else LINE,
+                      padx=10 if small else 14, pady=4 if small else 8)
+
+        def _enter(_):
+            if not getattr(b, "_hovering", False):
+                b._rest = b.cget("bg"); b._hovering = True
+                b.configure(bg=_lighten(b._rest))
+
+        def _leave(_):
+            b._hovering = False
+            b.configure(bg=getattr(b, "_rest", base))
+        b.bind("<Enter>", _enter, add="+")
+        b.bind("<Leave>", _leave, add="+")
+        return b
 
     def _label(self, parent, text, **kw):
         return tk.Label(parent, text=text, fg=kw.pop("fg", INK), bg=kw.pop("bg", BG),
                         font=kw.pop("font", ("Segoe UI", 10)), **kw)
+
+    def _panel(self, parent, **packopts):
+        """A card surface with a hairline border and a faint lit top edge — a cheap
+        'lit from above' bevel so panels read with depth instead of flat. Returns
+        the inner content frame; the wrapper is packed for you (pass pack options)."""
+        outer = tk.Frame(parent, bg=EDGE_HI)                 # 1px shows as the top edge
+        outer.pack(**(packopts or {"fill": "x"}))
+        inner = tk.Frame(outer, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+        inner.pack(fill="both", expand=True, pady=(1, 0))    # reveal 1px of EDGE_HI on top
+        return inner
+
+    def _section_title(self, parent, text, fg=INK):
+        """A section header with a small violet accent bar for hierarchy."""
+        row = tk.Frame(parent, bg=PANEL)
+        row.pack(fill="x", anchor="w", padx=10, pady=(8, 3))
+        tk.Frame(row, bg=ACCENT, width=3, height=14).pack(side="left", padx=(0, 7))
+        tk.Label(row, text=text, fg=fg, bg=PANEL,
+                 font=("Segoe UI Semibold", 10)).pack(side="left")
+        return row
 
     def _dot(self, canvas, color):
         canvas.delete("all"); canvas.create_oval(2, 2, 11, 11, fill=color, outline="")
@@ -393,10 +464,8 @@ class App(tk.Tk):
             return
         for w in fr.winfo_children():
             w.destroy()
-        box = tk.Frame(fr, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
-        box.pack(fill="x")
-        tk.Label(box, text="Your rooms", fg=INK, bg=PANEL,
-                 font=("Segoe UI Semibold", 10)).pack(anchor="w", padx=10, pady=(8, 2))
+        box = self._panel(fr, fill="x")
+        self._section_title(box, "Your rooms")
         for r in rooms[:8]:
             row = tk.Frame(box, bg=PANEL); row.pack(fill="x", padx=10, pady=2)
             star = "★ " if r.get("is_host") else ""
@@ -476,12 +545,15 @@ class App(tk.Tk):
     # over the near-black bg. Tk canvases have no per-item alpha, so we bake the
     # alpha+opacity down into an opaque colour composited over BG and draw flat
     # rectangles — visually the same faint steel field, just not see-through.
-    _BG_RGB = (0x07, 0x07, 0x09)   # BG = #070709
+    _BG_RGB = (0x0d, 0x0d, 0x10)   # BG = #0d0d10
 
     def _blend_pixel(self, value, alpha):
-        eff = (alpha / 255.0) * 0.30          # web: opacity .30 over the bg
+        eff = (alpha / 255.0) * 0.32          # web: opacity .30 over the bg
+        # faint violet tint (R/B up a touch, G down) rather than flat gray or a
+        # blue cast — keeps the header on-brand without making it read as blue.
+        tint = (value * 1.02, value * 0.94, value * 1.08)
         out = []
-        for v, b in zip((value, value, value), self._BG_RGB):
+        for v, b in zip(tint, self._BG_RGB):
             out.append(max(0, min(255, int(b + (v - b) * eff))))
         return "#%02x%02x%02x" % tuple(out)
 
@@ -584,10 +656,8 @@ class App(tk.Tk):
                     wraplength=560, justify="left").pack(anchor="w", pady=(0, 12))
 
         # Join / host on the server in the box above
-        join = tk.Frame(f, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
-        join.pack(fill="x", pady=6)
-        tk.Label(join, text="Play on this server", fg=INK, bg=PANEL,
-                 font=("Segoe UI Semibold", 10)).pack(anchor="w", padx=10, pady=(8, 4))
+        join = self._panel(f, fill="x", pady=6)
+        self._section_title(join, "Play on this server")
         coderow = tk.Frame(join, bg=PANEL); coderow.pack(fill="x", padx=10, pady=(0, 8))
         self.e_code = self._entry(coderow, value=self.cfg.get("room", ""))
         self.e_code.pack(side="left", fill="x", expand=True, ipady=3)
@@ -595,10 +665,8 @@ class App(tk.Tk):
         self._button(join, "Host a new room", self._host).pack(anchor="w", padx=10, pady=(0, 10))
 
         # Host a server on THIS PC (no website needed)
-        local = tk.Frame(f, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
-        local.pack(fill="x", pady=10)
-        tk.Label(local, text="Host a server on THIS PC", fg=INK, bg=PANEL,
-                 font=("Segoe UI Semibold", 10)).pack(anchor="w", padx=10, pady=(8, 2))
+        local = self._panel(f, fill="x", pady=10)
+        self._section_title(local, "Host a server on THIS PC")
         tk.Label(local, text="Runs the server right here, so nobody needs the public website. "
                  "Best for players on the same network.", fg=MUTED, bg=PANEL,
                  font=("Segoe UI", 8), wraplength=560, justify="left").pack(anchor="w", padx=10)
@@ -850,8 +918,7 @@ class App(tk.Tk):
         self._button(top, "Leave", self._leave, small=True).pack(side="right", padx=6)
 
         # emulator + connect row
-        emu = tk.Frame(f, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
-        emu.pack(fill="x", pady=(8, 6))
+        emu = self._panel(f, fill="x", pady=(8, 6))
         self.emu_summary_lbl = tk.Label(emu, text="Emulator: " + self._emu_summary(),
                                         fg=INK, bg=PANEL, font=("Segoe UI", 10))
         self.emu_summary_lbl.pack(anchor="w", padx=10, pady=(8, 2))
@@ -895,7 +962,7 @@ class App(tk.Tk):
         self.canvas.bind_all("<MouseWheel>", lambda e: self.canvas.yview_scroll(int(-e.delta/120), "units"))
 
         # activity (short)
-        self.logbox = tk.Text(f, height=3, bg="#0b0b10", fg=GREEN, relief="flat",
+        self.logbox = tk.Text(f, height=3, bg="#0e0d12", fg=GREEN, relief="flat",
                               font=(self.mono_font, 9), highlightthickness=1, highlightbackground=LINE)
         self.logbox.pack(fill="x", pady=(6, 0)); self.logbox.configure(state="disabled")
 
@@ -913,46 +980,46 @@ class App(tk.Tk):
         # the controls themselves live in a frame we can hide
         self.host_ctrls = tk.Frame(self.host_bar, bg=BG)
         c = self.host_ctrls
-        # steal cooldown — only meaningful in Normal (you can claim/steal there)
-        self.cd_group = tk.Frame(c, bg=BG)
-        tk.Label(self.cd_group, text="cooldown", fg=MUTED, bg=BG,
-                 font=("Segoe UI", 9)).pack(side="left", padx=(2, 2))
-        self.e_cd = self._entry(self.cd_group); self.e_cd.configure(width=4); self.e_cd.pack(side="left")
-        self._button(self.cd_group, "set", self._set_cooldown, small=True).pack(side="left", padx=4)
-        self.cd_group.pack(side="left")
-        self._mode_label = tk.Label(c, text="· mode", fg=MUTED, bg=BG, font=("Segoe UI", 9))
-        self._mode_label.pack(side="left", padx=(10, 2))
+        # mode selector first; its single timing parameter sits right after it.
+        tk.Label(c, text="mode", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(2, 4))
         self.mode_var = tk.StringVar(value="normal")
         cb = ttk.Combobox(c, textvariable=self.mode_var, state="readonly", width=11,
                           values=["normal", "hot_potato", "chaos"])
         cb.pack(side="left")
         cb.bind("<<ComboboxSelected>>", lambda e: self._sync_mode_fields())
-        # shuffle interval — only for the shuffle modes (hot potato / chaos)
+        # steal cooldown — Normal only (you can claim/steal there)
+        self.cd_group = tk.Frame(c, bg=BG)
+        tk.Label(self.cd_group, text="steal cooldown", fg=MUTED, bg=BG,
+                 font=("Segoe UI", 9)).pack(side="left", padx=(8, 2))
+        self.e_cd = self._entry(self.cd_group); self.e_cd.configure(width=4); self.e_cd.pack(side="left")
+        tk.Label(self.cd_group, text="s", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(2, 0))
+        self.cd_group.pack(side="left")
+        # shuffle interval — hot potato / chaos only
         self.shuffle_group = tk.Frame(c, bg=BG)
-        tk.Label(self.shuffle_group, text="every", fg=MUTED, bg=BG,
-                 font=("Segoe UI", 9)).pack(side="left", padx=(6, 2))
+        tk.Label(self.shuffle_group, text="shuffle every", fg=MUTED, bg=BG,
+                 font=("Segoe UI", 9)).pack(side="left", padx=(8, 2))
         self.e_shuffle = self._entry(self.shuffle_group); self.e_shuffle.configure(width=4)
         self.e_shuffle.pack(side="left")
-        tk.Label(self.shuffle_group, text="s", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left")
+        tk.Label(self.shuffle_group, text="s", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(2, 0))
         self.shuffle_group.pack(side="left")
-        self._go_btn = self._button(c, "go", self._set_mode, small=True)
-        self._go_btn.pack(side="left", padx=4)
+        self._apply_btn = self._button(c, "Apply", self._apply_host, small=True)
+        self._apply_btn.pack(side="left", padx=8)
         tk.Label(c, text="· click player=remove · right-click item=manage",
                  fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=8)
         self._sync_mode_fields()
         self._apply_host_collapse()
 
     def _sync_mode_fields(self):
-        """Show 'steal cooldown' only in Normal and the 'shuffle every…' fields
-        only in the shuffle modes — they don't both apply at once."""
+        """Show 'steal cooldown' only in Normal and 'shuffle every…' only in the
+        shuffle modes — both sit right after the mode selector, never both at once."""
         if not hasattr(self, "cd_group"):
             return
         if self.mode_var.get() == "normal":
             self.shuffle_group.pack_forget()
-            self.cd_group.pack(side="left", before=self._mode_label)
+            self.cd_group.pack(side="left", before=self._apply_btn)
         else:
             self.cd_group.pack_forget()
-            self.shuffle_group.pack(side="left", before=self._go_btn)
+            self.shuffle_group.pack(side="left", before=self._apply_btn)
 
     def _toggle_host_controls(self):
         self._host_collapsed = not self._host_collapsed
@@ -985,18 +1052,26 @@ class App(tk.Tk):
     def _is_host(self):
         return bool(self.state) and self.state.get("you") == self.state.get("host")
 
-    def _set_cooldown(self):
+    def _apply_host(self):
+        """Apply the mode + its one timing field, sending only what actually
+        changed — re-sending admin_set_mode for the same mode would reset the
+        shuffle timer and spam an event, so we guard against no-op re-applies."""
+        st = self.state or {}
+        mode = self.mode_var.get()
         try:
-            self._ui_send({"type": "admin_set_cooldown", "seconds": float(self.e_cd.get())})
+            shuffle = float(self.e_shuffle.get() or 120)
         except ValueError:
-            pass
-
-    def _set_mode(self):
+            shuffle = 120.0
         try:
-            secs = float(self.e_shuffle.get() or 120)
+            cooldown = float(self.e_cd.get() or 0)
         except ValueError:
-            secs = 120
-        self._ui_send({"type": "admin_set_mode", "mode": self.mode_var.get(), "seconds": secs})
+            cooldown = 0.0
+        mode_changed = mode != st.get("mode", "normal")
+        shuffle_changed = mode != "normal" and round(shuffle) != round(st.get("shuffle_s", 120))
+        if mode_changed or shuffle_changed:
+            self._ui_send({"type": "admin_set_mode", "mode": mode, "seconds": shuffle})
+        if mode == "normal" and round(cooldown) != round(st.get("cooldown_s", 0)):
+            self._ui_send({"type": "admin_set_cooldown", "seconds": cooldown})
 
     @staticmethod
     def _clock(s):
@@ -1029,7 +1104,7 @@ class App(tk.Tk):
         host = self._is_host()
         for p in self.state.get("players", []):
             color = GREEN if (p.get("agent") and p.get("emu")) else (
-                GOLD if p.get("agent") else "#555")
+                GOLD if p.get("agent") else DIM)
             chip = tk.Frame(self.players_row, bg=BG); chip.pack(side="left", padx=(0, 10))
             c = tk.Canvas(chip, width=12, height=12, bg=BG, highlightthickness=0); c.pack(side="left")
             self._dot(c, color)
@@ -1050,10 +1125,10 @@ class App(tk.Tk):
             self._ui_send({"type": "admin_remove_player", "player_id": pid})
 
     # ── host: per-item found/owner management (right-click an item) ───────────
-    def _bind_recursive(self, widget, sequence, func):
-        widget.bind(sequence, func)
+    def _bind_recursive(self, widget, sequence, func, add=None):
+        widget.bind(sequence, func, add=add)
         for ch in widget.winfo_children():
-            self._bind_recursive(ch, sequence, func)
+            self._bind_recursive(ch, sequence, func, add=add)
 
     def _manage_item(self, key, name):
         """Host-only popup to fix who has 'found' an item and who owns it — mirrors
@@ -1262,6 +1337,22 @@ class App(tk.Tk):
         else:
             self._button(action, "Claim", lambda k=cat["key"]: self._ui_send({"type": "claim", "item": k}),
                          small=True).pack()
+        # hover: brighten the card's edge as the pointer moves over it. Bound
+        # across all children (add="+", debounced) so crossing inner widgets
+        # doesn't flicker the highlight off.
+        norm = GREEN if mine else border
+        hover = _lighten(norm, 0.32)
+
+        def _hov_on(_):
+            card._hov = True
+            card.configure(highlightbackground=hover)
+
+        def _hov_off(_):
+            card._hov = False
+            card.after(40, lambda: card.winfo_exists() and not getattr(card, "_hov", False)
+                       and card.configure(highlightbackground=norm))
+        self._bind_recursive(card, "<Enter>", _hov_on, add="+")
+        self._bind_recursive(card, "<Leave>", _hov_off, add="+")
         # host: right-click anywhere on a card to manage found/owner per player
         if self._is_host():
             card.configure(cursor="hand2")
@@ -1394,7 +1485,7 @@ class App(tk.Tk):
             pass
         self.agent = None; self.transport = None
         if getattr(self, "btn_connect", None) is not None and self.btn_connect.winfo_exists():
-            self.btn_connect.config(text="Connect & Play", bg=ACCENT, fg=BG)
+            self.btn_connect.config(text="Connect & Play", bg=PRIMARY, fg="#ffffff")
         self._log("Emulator unlinked.")
 
     def _leave(self):
@@ -1654,7 +1745,7 @@ class App(tk.Tk):
             if self.agent is None:
                 t, s, label = self._detected
                 ok = label != "not detected"
-                self._dot(self.dot_emu, GREEN if ok else "#555")
+                self._dot(self.dot_emu, GREEN if ok else DIM)
                 self.lbl_emu.config(text="emulator: " + (label if ok else "not linked"))
                 if hasattr(self, "emu_line"):
                     self.emu_line.config(
@@ -1671,7 +1762,7 @@ class App(tk.Tk):
                                          if emu_ok else "Linking… (load your seed if you haven't)",
                                          fg=GREEN if emu_ok else GOLD)
         else:
-            self._dot(self.dot_emu, "#555"); self._dot(self.dot_srv, "#555")
+            self._dot(self.dot_emu, DIM); self._dot(self.dot_srv, DIM)
             self.lbl_emu.config(text="emulator: —"); self.lbl_srv.config(text="server: —")
         # live countdowns between server pushes (cooldown, hot-potato hold, chaos timer)
         if self.state:
