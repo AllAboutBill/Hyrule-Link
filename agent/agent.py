@@ -89,8 +89,22 @@ class HyruleAgent:
             self._apply(msg["item"], int(msg.get("level", 1)), enable=True)
         elif mtype == P.REVOKE:
             self._apply(msg["item"], 0, enable=False)
+        elif mtype == P.NOTIFY:
+            self._show_notification(msg.get("text", ""))
         elif mtype == P.REJECT:
             logger.info("Server rejected: %s", msg.get("reason"))
+
+    def _show_notification(self, text):
+        text = " ".join(str(text).split())[:120]
+        if not text:
+            return
+        show = getattr(self.t, "show_message", None)
+        if show and self.t.connected:
+            try:
+                if show(text):
+                    logger.info("Emulator notification: %s", text)
+            except Exception as e:
+                logger.debug("emulator notification failed: %s", e)
 
     def _on_error(self, ws, err):
         logger.debug("ws error: %s", err)

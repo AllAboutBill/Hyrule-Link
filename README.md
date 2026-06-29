@@ -156,6 +156,10 @@ duplicate.
 > - *Not* supported: plain mainline snes9x with no network build / no Lua — it
 >   exposes no memory. Use snes9x-nwa or RetroArch.
 >
+> RetroArch also shows HyruleLink events directly over gameplay: item transfers
+> identify the other player, and Chaos emits one `Items shuffled` notice. Other
+> transports ignore these OSD-only notifications safely.
+>
 > In the app, **"Which emulators?"** explains all of this.
 
 Third-party tools live under `tools/`: **SNI** (MIT) is downloaded from its

@@ -44,8 +44,9 @@ SETTINGS = os.path.join(HERE, "agent", "gui_settings.json")
 PUBLIC_SERVER = "https://hyrulelink.billogna.lol"   # default shared server
 SNI_DIR = os.path.join(HERE, "tools", "sni")        # installer-managed SNI bridge (MIT)
 ITEMS_DIR = os.path.join(HERE, "web", "items")      # item sprite PNGs (shared w/ web)
-ICON_PX = 30                                        # board item sprite size
-CARD_MIN_PX = 132                                   # min item-card width → column count
+ICON_PX = 38                                        # board item sprite size
+CARD_MIN_PX = 145                                   # min item-card width → column count
+CARD_H = 128                                        # stable grid rhythm
 
 # Open-mode ALTTPR settings for in-app seed generation (assured sword = quick start).
 OPEN_SEED_SETTINGS = {
@@ -66,15 +67,13 @@ OPEN_SEED_SETTINGS = {
 # Violet on neutral charcoal — surfaces are de-saturated (no blue cast) so the
 # violet accent reads as a deliberate pop instead of a sea of blue. Blue is
 # reserved for "owned by someone else", aqua for "you/online", gold for "owner".
-BG = "#0d0d10"; PANEL = "#17171c"; PANEL2 = "#232229"; FIELD = "#1c1b22"
-INK = "#f1eff5"; MUTED = "#a4a0ad"; DIM = "#56535e"; EDGE_HI = "#343139"   # lit top edge
-GOLD = "#ffd700"; GREEN = "#a87dff"; RED = "#ff6b7a"; BLUE = "#6cb8ff"; LINE = "#302e38"
-ACCENT = "#bcaaff"                              # brand violet (headings, focus ring)
-PRIMARY = "#7c5cff"; PRIMARY_HI = "#9277ff"     # primary button fill / hover (white text)
-ACCENT2 = "#c084fc"                             # chaos / secondary accent
-# Note: GREEN now holds a purple "you/mine/online/success" tone (kept the name to
-# limit churn) — so owned-by-you reads in the brand family, not mint. BLUE stays
-# "owned by someone else", so the two ownership states remain distinct.
+BG = "#0b0a10"; PANEL = "#15131c"; PANEL2 = "#211e2a"; FIELD = "#100f16"
+CARD = "#121118"; CARD_MINE = "#211a35"; CARD_OWNED = "#141a24"
+INK = "#f4f1fa"; MUTED = "#aaa3b7"; DIM = "#625c6c"; EDGE_HI = "#3a3448"
+GOLD = "#f2c75c"; GREEN = "#68dda8"; RED = "#ff7585"; BLUE = "#6bb4ff"; LINE = "#302b3c"
+ACCENT = "#b7a0ff"                              # brand violet (headings, focus ring)
+PRIMARY = "#7657ff"; PRIMARY_HI = "#8c73ff"     # primary button fill / hover (white text)
+ACCENT2 = "#c08cff"                             # chaos / secondary accent
 
 
 def _lighten(hexcol, amt=0.12):
@@ -288,10 +287,11 @@ class App(tk.Tk):
         self.mono_font = "DM Mono" if "DM Mono" in fams else "Consolas"
         self.title("HyruleLink")
         self.configure(bg=BG)
+        self._configure_ttk()
         # Open wide and as tall as the screen allows, so the multi-column board
         # fits without scrolling (clamped so it still fits smaller displays).
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        self.geometry(f"{min(1180, sw - 80)}x{min(900, sh - 80)}")
+        self.geometry(f"{min(1240, sw - 80)}x{min(920, sh - 80)}")
         self.minsize(720, 560)
         self._enable_dark_titlebar()  # dark native title bar to match the app
         self._board_cols = 0          # current item-grid column count (responsive)
@@ -355,6 +355,22 @@ class App(tk.Tk):
             self._stop_all.wait(1.5)
 
     # ── chrome ──────────────────────────────────────────────────────────────
+    def _configure_ttk(self):
+        """Make native ttk controls belong to the same dark visual system."""
+        style = ttk.Style(self)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure("HL.TCombobox", fieldbackground=FIELD, background=PANEL2,
+                        foreground=INK, arrowcolor=MUTED, bordercolor=LINE,
+                        lightcolor=LINE, darkcolor=LINE, padding=(7, 5))
+        style.map("HL.TCombobox", fieldbackground=[("readonly", FIELD)],
+                  foreground=[("readonly", INK)], bordercolor=[("focus", ACCENT)])
+        style.configure("HL.Vertical.TScrollbar", background=PANEL2, troughcolor=BG,
+                        bordercolor=BG, arrowcolor=MUTED, lightcolor=PANEL2,
+                        darkcolor=PANEL2, width=12)
+
     def _enable_dark_titlebar(self):
         """Windows 10/11: paint the native title bar dark so it matches the app
         instead of the default white. No-op (and harmless) elsewhere."""
@@ -377,12 +393,14 @@ class App(tk.Tk):
         # Header is a live pixel-field banner — the closest Tk can get to the
         # site's nexus-bg.js field (widgets are opaque, so the field can only sit
         # behind chrome, not show *through* the cards like the web's glass does).
-        HEAD_H = 64
+        HEAD_H = 62
         self.header = tk.Canvas(self, height=HEAD_H, bg=BG, highlightthickness=0)
         self.header.pack(fill="x")
         self._attach_pixel_field(self.header, cell=24)
-        self.header.create_text(18, HEAD_H // 2 - 1, anchor="w", text="HyruleLink",
-                                fill=ACCENT, font=(self.logo_font, 18, "bold"), tags="fg")
+        self.header.create_text(20, 23, anchor="w", text="HyruleLink",
+                                fill=ACCENT, font=(self.logo_font, 17, "bold"), tags="fg")
+        self.header.create_text(21, 44, anchor="w", text="SHARED INVENTORY CO-OP",
+                                fill=MUTED, font=(self.mono_font, 7), tags="fg")
         self._who_id = self.header.create_text(0, HEAD_H // 2 - 1, anchor="e", text="",
                                                fill=MUTED, font=("Segoe UI", 9), tags="fg")
         # mint underline echoing the web header's glow
@@ -395,9 +413,10 @@ class App(tk.Tk):
             self.header.tag_raise("fg")
         self.header.bind("<Configure>", _layout_header, add="+")
 
-        self.body = tk.Frame(self, bg=BG); self.body.pack(fill="both", expand=True, padx=16, pady=4)
+        self.body = tk.Frame(self, bg=BG); self.body.pack(fill="both", expand=True, padx=20, pady=10)
 
-        bar = tk.Frame(self, bg=PANEL); bar.pack(fill="x", side="bottom")
+        bar = tk.Frame(self, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+        bar.pack(fill="x", side="bottom")
         self.dot_emu = tk.Canvas(bar, width=12, height=12, bg=PANEL, highlightthickness=0)
         self.dot_emu.pack(side="left", padx=(12, 4), pady=8)
         self.lbl_emu = tk.Label(bar, text="emulator: —", fg=MUTED, bg=PANEL, font=("Segoe UI", 9))
@@ -413,9 +432,10 @@ class App(tk.Tk):
 
     def _entry(self, parent, show=None, value=""):
         e = tk.Entry(parent, show=show, bg=FIELD, fg=INK, insertbackground=ACCENT,
-                     relief="flat", font=("Segoe UI", 11))
+                     relief="flat", font=("Segoe UI", 10))
         e.insert(0, value)
-        e.configure(highlightthickness=1, highlightbackground=LINE, highlightcolor=ACCENT)
+        e.configure(highlightthickness=1, highlightbackground=LINE, highlightcolor=ACCENT,
+                    disabledbackground=FIELD, disabledforeground=DIM)
         return e
 
     def _button(self, parent, text, cmd, primary=False, small=False):
@@ -428,11 +448,11 @@ class App(tk.Tk):
                       bg=base, fg="#ffffff" if primary else INK,
                       activebackground=PRIMARY_HI if primary else LINE,
                       activeforeground="#ffffff" if primary else INK,
-                      font=("Segoe UI Semibold", 9 if small else 11),
+                      font=("Segoe UI Semibold", 9 if small else 10),
                       bd=0, highlightthickness=1,
                       highlightbackground=PRIMARY_HI if primary else LINE,
                       highlightcolor=PRIMARY_HI if primary else LINE,
-                      padx=10 if small else 14, pady=4 if small else 8)
+                      padx=10 if small else 16, pady=4 if small else 8)
 
         def _enter(_):
             if not getattr(b, "_hovering", False):
@@ -468,6 +488,20 @@ class App(tk.Tk):
         tk.Label(row, text=text, fg=fg, bg=PANEL,
                  font=("Segoe UI Semibold", 10)).pack(side="left")
         return row
+
+    def _eyebrow(self, parent, text, bg=BG):
+        return tk.Label(parent, text=text.upper(), fg=ACCENT, bg=bg,
+                        font=(self.mono_font, 8), anchor="w")
+
+    def _field_label(self, parent, text, bg=PANEL):
+        return tk.Label(parent, text=text, fg=MUTED, bg=bg,
+                        font=("Segoe UI Semibold", 8), anchor="w")
+
+    def _copy_text(self, value, notice="Copied"):
+        self.clipboard_clear(); self.clipboard_append(value); self.update()
+        if hasattr(self, "toast_lbl") and self.toast_lbl.winfo_exists():
+            self.toast_lbl.config(text=notice, fg=GREEN)
+            self.after(1800, lambda: self.toast_lbl.winfo_exists() and self.toast_lbl.config(text=""))
 
     def _dot(self, canvas, color):
         canvas.delete("all"); canvas.create_oval(2, 2, 11, 11, fill=color, outline="")
@@ -688,67 +722,98 @@ class App(tk.Tk):
 
     # ── step 1: name + host/join ────────────────────────────────────────────
     def show_start(self):
+        self.unbind_all("<MouseWheel>")
         self._clear_body(); self._set_who("")
         f = self.body
-        self._label(f, "Start playing", fg=ACCENT, font=(self.logo_font, 14, "bold")).pack(anchor="w", pady=(6, 10))
+        shell = tk.Frame(f, bg=BG); shell.pack(fill="both", expand=True)
 
-        # Discord login row
-        drow = tk.Frame(f, bg=BG); drow.pack(fill="x", pady=(0, 8))
-        if self.me:
-            tag = "  ★ mod" if self.me.get("admin") else ""
-            self._label(drow, f"✓ Discord: {self.me.get('name', '')}{tag}", fg=GREEN,
-                        font=("Segoe UI Semibold", 10)).pack(side="left")
-            self._button(drow, "Logout", self._discord_logout, small=True).pack(side="left", padx=8)
-        else:
-            self._button(drow, "Login with Discord", self._discord_login, small=True).pack(side="left")
-            self._label(drow, "optional — keeps your rooms across devices + mod powers",
-                        fg=MUTED, font=("Segoe UI", 8)).pack(side="left", padx=8)
+        hero = tk.Frame(shell, bg=BG); hero.pack(fill="x", pady=(2, 16))
+        self._eyebrow(hero, "Player app").pack(anchor="w")
+        tk.Label(hero, text="Start a shared run", fg=INK, bg=BG,
+                 font=(self.logo_font, 20, "bold")).pack(anchor="w", pady=(2, 3))
+        tk.Label(hero, text="Join friends on the public hub, create a room, or host the whole "
+                 "session from this PC.", fg=MUTED, bg=BG, font=("Segoe UI", 10),
+                 anchor="w").pack(anchor="w")
 
-        self._label(f, "Your name", fg=MUTED, font=("Segoe UI", 9)).pack(anchor="w")
+        columns = tk.Frame(shell, bg=BG); columns.pack(fill="both", expand=True)
+        columns.grid_columnconfigure(0, weight=3, uniform="start")
+        columns.grid_columnconfigure(1, weight=2, uniform="start")
+        columns.grid_rowconfigure(0, weight=1)
+        left = tk.Frame(columns, bg=BG); left.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
+        right = tk.Frame(columns, bg=BG); right.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
+
+        play = self._panel(left, fill="x")
+        self._section_title(play, "Join or create a room")
+        form = tk.Frame(play, bg=PANEL); form.pack(fill="x", padx=14, pady=(2, 14))
         default_name = self.cfg.get("display") or (self.me.get("name") if self.me else "") or ""
-        self.e_name = self._entry(f, value=default_name)
-        self.e_name.pack(fill="x", pady=(0, 8), ipady=4)
+        self._field_label(form, "PLAYER NAME").pack(fill="x", pady=(0, 4))
+        self.e_name = self._entry(form, value=default_name)
+        self.e_name.pack(fill="x", ipady=6, pady=(0, 12))
 
-        # Your rooms (logged-in) — filled asynchronously
-        self.myrooms_frame = tk.Frame(f, bg=BG)
+        self._field_label(form, "ROOM CODE").pack(fill="x", pady=(0, 4))
+        coderow = tk.Frame(form, bg=PANEL); coderow.pack(fill="x")
+        self.e_code = self._entry(coderow, value=self.cfg.get("room", ""))
+        self.e_code.pack(side="left", fill="x", expand=True, ipady=6)
+        self._button(coderow, "Join room", self._join, primary=True).pack(side="left", padx=(8, 0))
+        self.e_code.bind("<Return>", lambda _e: self._join())
+
+        sep = tk.Frame(form, bg=LINE, height=1); sep.pack(fill="x", pady=14)
+        hostrow = tk.Frame(form, bg=PANEL); hostrow.pack(fill="x")
+        tk.Label(hostrow, text="Starting the group?", fg=MUTED, bg=PANEL,
+                 font=("Segoe UI", 9)).pack(side="left")
+        self._button(hostrow, "Create a room", self._host).pack(side="right")
+
+        server = tk.Frame(play, bg=FIELD, highlightbackground=LINE, highlightthickness=1)
+        server.pack(fill="x", padx=14, pady=(0, 14))
+        self._field_label(server, "SERVER", bg=FIELD).pack(fill="x", padx=10, pady=(8, 3))
+        self.e_server = self._entry(server, value=self.cfg.get("server", PUBLIC_SERVER))
+        self.e_server.pack(fill="x", padx=10, ipady=4)
+        tk.Label(server, text="Keep the public server unless a host gave you another address.",
+                 fg=MUTED, bg=FIELD, font=("Segoe UI", 8), anchor="w").pack(
+                     fill="x", padx=10, pady=(4, 8))
+
+        self.myrooms_frame = tk.Frame(left, bg=BG)
         if self.me:
-            self.myrooms_frame.pack(fill="x", pady=(0, 4))
+            self.myrooms_frame.pack(fill="x", pady=(14, 0))
             self._load_my_rooms_async()
 
-        self._label(f, "Server", fg=MUTED, font=("Segoe UI", 9)).pack(anchor="w")
-        self.e_server = self._entry(f, value=self.cfg.get("server", PUBLIC_SERVER))
-        self.e_server.pack(fill="x", pady=(0, 2), ipady=4)
-        self._label(f, "Default is the public server — leave it to play with anyone. Change it "
-                    "only to join someone's local server.", fg=MUTED, font=("Segoe UI", 8),
-                    wraplength=560, justify="left").pack(anchor="w", pady=(0, 12))
+        account = self._panel(right, fill="x")
+        self._section_title(account, "Account")
+        ar = tk.Frame(account, bg=PANEL); ar.pack(fill="x", padx=14, pady=(2, 14))
+        if self.me:
+            tag = "  ·  moderator" if self.me.get("admin") else ""
+            tk.Label(ar, text="●", fg=GREEN, bg=PANEL, font=("Segoe UI", 11)).pack(side="left")
+            tk.Label(ar, text=f"{self.me.get('name', 'Discord user')}{tag}", fg=INK, bg=PANEL,
+                     font=("Segoe UI Semibold", 10)).pack(side="left", padx=7)
+            self._button(ar, "Log out", self._discord_logout, small=True).pack(side="right")
+        else:
+            info = tk.Frame(ar, bg=PANEL); info.pack(fill="x")
+            tk.Label(info, text="Keep rooms across devices and unlock moderator tools.",
+                     fg=MUTED, bg=PANEL, font=("Segoe UI", 9), wraplength=310,
+                     justify="left").pack(anchor="w", pady=(0, 9))
+            self._button(info, "Connect Discord", self._discord_login).pack(anchor="w")
 
-        # Join / host on the server in the box above
-        join = self._panel(f, fill="x", pady=6)
-        self._section_title(join, "Play on this server")
-        coderow = tk.Frame(join, bg=PANEL); coderow.pack(fill="x", padx=10, pady=(0, 8))
-        self.e_code = self._entry(coderow, value=self.cfg.get("room", ""))
-        self.e_code.pack(side="left", fill="x", expand=True, ipady=3)
-        self._button(coderow, "Join", self._join, primary=True).pack(side="left", padx=(6, 0))
-        self._button(join, "Host a new room", self._host).pack(anchor="w", padx=10, pady=(0, 10))
-
-        # Host a server on THIS PC (no website needed)
-        local = self._panel(f, fill="x", pady=10)
-        self._section_title(local, "Host a server on THIS PC")
-        tk.Label(local, text="Runs the server right here, so nobody needs the public website. "
-                 "Best for players on the same network.", fg=MUTED, bg=PANEL,
-                 font=("Segoe UI", 8), wraplength=560, justify="left").pack(anchor="w", padx=10)
-        lrow = tk.Frame(local, bg=PANEL); lrow.pack(anchor="w", padx=10, pady=(6, 4))
-        tk.Label(lrow, text="Port", fg=MUTED, bg=PANEL, font=("Segoe UI", 9)).pack(side="left")
+        local = self._panel(right, fill="x", pady=(14, 0))
+        self._section_title(local, "Host from this PC")
+        tk.Label(local, text="Run a private hub here. Use the free tunnel when players are "
+                 "outside your network.", fg=MUTED, bg=PANEL, font=("Segoe UI", 9),
+                 wraplength=360, justify="left").pack(anchor="w", padx=14, pady=(2, 10))
+        lrow = tk.Frame(local, bg=PANEL); lrow.pack(fill="x", padx=14)
+        self._field_label(lrow, "PORT").pack(side="left", padx=(0, 7))
         self.e_port = self._entry(lrow, value=str(self.cfg.get("local_port", 5019)))
-        self.e_port.configure(width=6); self.e_port.pack(side="left", padx=(4, 8))
-        self._button(lrow, "Start local server & host", self._host_local).pack(side="left")
+        self.e_port.configure(width=7); self.e_port.pack(side="left", ipady=4)
         self.tunnel_var = tk.BooleanVar(value=self.cfg.get("use_tunnel", False))
-        tk.Checkbutton(local, text="Also make it reachable over the internet (free tunnel — "
-                       "no port forwarding)", variable=self.tunnel_var, fg=INK, bg=PANEL,
-                       selectcolor=PANEL2, activebackground=PANEL, activeforeground=INK,
-                       font=("Segoe UI", 9), anchor="w").pack(anchor="w", padx=8, pady=(0, 10))
+        tk.Checkbutton(local, text="Create a public internet link", variable=self.tunnel_var,
+                       fg=INK, bg=PANEL, selectcolor=PANEL2, activebackground=PANEL,
+                       activeforeground=INK, font=("Segoe UI", 9), anchor="w").pack(
+                           anchor="w", padx=10, pady=(10, 10))
+        self._button(local, "Start local server", self._host_local, primary=True).pack(
+            fill="x", padx=14, pady=(0, 14))
 
-        self.err = self._label(f, "", fg=RED, font=("Segoe UI", 9)); self.err.pack(anchor="w", pady=8)
+        self.err = self._label(shell, "", fg=RED, font=("Segoe UI Semibold", 9))
+        self.err.pack(fill="x", pady=(10, 0))
+        self.toast_lbl = self._label(shell, "", fg=GREEN, font=("Segoe UI", 9))
+        self.toast_lbl.pack(fill="x")
 
     def _host(self):
         self.base = self.e_server.get().strip().rstrip("/")
@@ -972,52 +1037,84 @@ class App(tk.Tk):
         self._set_who(f"{self.cfg.get('display','Player')} · room {self.room['code']}")
         f = self.body
 
-        top = tk.Frame(f, bg=BG); top.pack(fill="x")
-        self.room_title_lbl = tk.Label(top, text=self._room_title(), fg=GOLD, bg=BG,
-                                        font=(self.logo_font, 15, "bold"))
+        top = tk.Frame(f, bg=BG); top.pack(fill="x", pady=(0, 10))
+        titleblock = tk.Frame(top, bg=BG); titleblock.pack(side="left", fill="x", expand=True)
+        self._eyebrow(titleblock, "Live room").pack(anchor="w")
+        titleline = tk.Frame(titleblock, bg=BG); titleline.pack(fill="x", pady=(2, 0))
+        self.room_title_lbl = tk.Label(titleline, text=self._room_title(), fg=INK, bg=BG,
+                                       font=(self.logo_font, 17, "bold"))
         self.room_title_lbl.pack(side="left")
+        codebox = tk.Frame(titleline, bg=PANEL2, highlightbackground=LINE, highlightthickness=1)
+        codebox.pack(side="left", padx=10)
+        tk.Label(codebox, text=self.room["code"], fg=ACCENT, bg=PANEL2,
+                 font=(self.mono_font, 9)).pack(side="left", padx=(9, 4), pady=4)
+        tk.Button(codebox, text="copy", command=lambda: self._copy_text(self.room["code"], "Room code copied"),
+                  bg=PANEL2, fg=MUTED, activebackground=LINE, activeforeground=INK,
+                  relief="flat", bd=0, cursor="hand2", font=("Segoe UI Semibold", 8),
+                  padx=6, pady=1).pack(side="left", padx=(0, 3))
         # Rename button sits by the title; shown only to the host (in _render_board)
-        self.rename_btn = self._button(top, "✎ Rename", self._rename_room, small=True)
-        self._button(top, "Spectator view",
+        self.rename_btn = self._button(titleline, "Rename", self._rename_room, small=True)
+
+        actions = tk.Frame(top, bg=BG); actions.pack(side="right", anchor="n")
+        self._button(actions, "Open spectator",
                      lambda: webbrowser.open(
                          f"{self.base}/?watch={self.room.get('pub_id') or self.room['code']}"),
                      small=True).pack(side="right")
-        self._button(top, "Leave", self._leave, small=True).pack(side="right", padx=6)
+        self._button(actions, "Leave room", self._leave, small=True).pack(side="right", padx=6)
 
-        # emulator + connect row
-        emu = self._panel(f, fill="x", pady=(8, 6))
-        self.emu_summary_lbl = tk.Label(emu, text="Emulator: " + self._emu_summary(),
-                                        fg=INK, bg=PANEL, font=("Segoe UI", 10))
-        self.emu_summary_lbl.pack(anchor="w", padx=10, pady=(8, 2))
-        erow = tk.Frame(emu, bg=PANEL); erow.pack(anchor="w", padx=10, pady=(0, 4))
-        self.btn_connect = self._button(erow, "Connect & Play", self._toggle_connect, primary=True)
-        self.btn_connect.pack(side="left")
-        self._button(erow, "Launch emulator", self.launch_emulator).pack(side="left", padx=6)
-        self._button(erow, "Generate seed", self.generate_seed).pack(side="left")
-        erow2 = tk.Frame(emu, bg=PANEL); erow2.pack(anchor="w", padx=10, pady=(0, 8))
-        self._button(erow2, "Start SNI", self._use_sni, small=True).pack(side="left", padx=(0, 6))
-        self._button(erow2, "Configure…", self._configure_emulator, small=True).pack(side="left")
-        self._button(erow2, "Which emulators?", self._show_emu_help, small=True).pack(side="left", padx=6)
-        self.emu_line = tk.Label(emu, text="", fg=MUTED, bg=PANEL, font=("Segoe UI", 9))
-        self.emu_line.pack(anchor="w", padx=10, pady=(0, 8))
+        # compact play connection strip
+        emu = self._panel(f, fill="x", pady=(0, 8))
+        connect_actions = tk.Frame(emu, bg=PANEL); connect_actions.pack(side="right", padx=14, pady=12)
+        self.btn_connect = self._button(connect_actions, "Connect & Play", self._toggle_connect, primary=True)
+        self.btn_connect.pack(fill="x")
+        main_tools = tk.Frame(connect_actions, bg=PANEL); main_tools.pack(fill="x", pady=(6, 0))
+        self._button(main_tools, "Launch", self.launch_emulator, small=True).pack(side="left")
+        self._button(main_tools, "Generate seed", self.generate_seed, small=True).pack(side="left", padx=5)
 
-        # players row
-        self.players_row = tk.Frame(f, bg=BG); self.players_row.pack(fill="x", pady=(2, 6))
+        connect_info = tk.Frame(emu, bg=PANEL); connect_info.pack(side="left", fill="both", expand=True,
+                                                                  padx=14, pady=11)
+        self._eyebrow(connect_info, "Play connection", bg=PANEL).pack(anchor="w")
+        self.emu_summary_lbl = tk.Label(connect_info, text=self._emu_summary(), fg=INK, bg=PANEL,
+                                        font=("Segoe UI Semibold", 11), anchor="w")
+        self.emu_summary_lbl.pack(fill="x", pady=(2, 2))
+        self.emu_line = tk.Label(connect_info, text="", fg=MUTED, bg=PANEL, font=("Segoe UI", 9),
+                                 anchor="w")
+        self.emu_line.pack(fill="x")
+        tools = tk.Frame(connect_info, bg=PANEL); tools.pack(fill="x", pady=(7, 0))
+        self._button(tools, "Start SNI", self._use_sni, small=True).pack(side="left")
+        self._button(tools, "Configure", self._configure_emulator, small=True).pack(side="left", padx=5)
+        self._button(tools, "Emulator help", self._show_emu_help, small=True).pack(side="left")
+
+        # player roster
+        roster = tk.Frame(f, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+        roster.pack(fill="x", pady=(0, 8))
+        tk.Label(roster, text="PLAYERS", fg=MUTED, bg=PANEL,
+                 font=(self.mono_font, 8)).pack(side="left", padx=(11, 8), pady=9)
+        self.players_row = tk.Frame(roster, bg=PANEL); self.players_row.pack(side="left", fill="x", expand=True)
 
         # host controls (shown only to host)
-        self.host_bar = tk.Frame(f, bg=BG)
+        self.host_bar = tk.Frame(f, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
         self._build_host_bar()
 
         # game-mode banner (shown to everyone when a shuffle mode is active)
-        self.mode_banner = tk.Label(f, text="", bg=PANEL, fg=GOLD, anchor="w",
-                                    font=(self.logo_font, 11, "bold"), padx=10, pady=6)
+        self.mode_banner = tk.Label(f, text="", bg=PANEL2, fg=GOLD, anchor="w",
+                                    font=("Segoe UI Semibold", 10), padx=12, pady=8)
+
+        self.board_head = tk.Frame(f, bg=BG); self.board_head.pack(fill="x", pady=(2, 6))
+        tk.Label(self.board_head, text="Shared inventory", fg=INK, bg=BG,
+                 font=(self.logo_font, 12, "bold")).pack(side="left")
+        tk.Label(self.board_head, text=f"{len(ITEMS)} progression items", fg=MUTED, bg=BG,
+                 font=("Segoe UI", 8)).pack(side="left", padx=10)
+        tk.Label(self.board_head, text="VIOLET  yours     BLUE  another player     DIM  undiscovered",
+                 fg=MUTED, bg=BG, font=(self.mono_font, 7)).pack(side="right")
 
         # the board (responsive grid: fills width, reflows columns to stay wide)
         self._board_sig = None       # fresh, empty board — force the first render
         self.board_wrap = tk.Frame(f, bg=BG); self.board_wrap.pack(fill="both", expand=True)
         board_wrap = self.board_wrap
         self.canvas = tk.Canvas(board_wrap, bg=BG, highlightthickness=0)
-        sb = ttk.Scrollbar(board_wrap, orient="vertical", command=self.canvas.yview)
+        sb = ttk.Scrollbar(board_wrap, orient="vertical", command=self.canvas.yview,
+                           style="HL.Vertical.TScrollbar")
         self.board = tk.Frame(self.canvas, bg=BG)
         self.board.bind("<Configure>",
                         lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
@@ -1028,10 +1125,18 @@ class App(tk.Tk):
         self.canvas.bind("<Configure>", self._on_canvas_resize)
         self.canvas.bind_all("<MouseWheel>", lambda e: self.canvas.yview_scroll(int(-e.delta/120), "units"))
 
-        # activity (short)
-        self.logbox = tk.Text(f, height=3, bg="#0e0d12", fg=GREEN, relief="flat",
-                              font=(self.mono_font, 9), highlightthickness=1, highlightbackground=LINE)
-        self.logbox.pack(fill="x", pady=(6, 0)); self.logbox.configure(state="disabled")
+        # compact activity console
+        activity = tk.Frame(f, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+        activity.pack(fill="x", pady=(8, 0))
+        tk.Label(activity, text="ACTIVITY", fg=MUTED, bg=PANEL,
+                 font=(self.mono_font, 8)).pack(side="left", padx=10)
+        self.logbox = tk.Text(activity, height=2, bg=PANEL, fg=GREEN, relief="flat",
+                              font=(self.mono_font, 8), highlightthickness=0, padx=5, pady=5)
+        self.logbox.pack(side="left", fill="x", expand=True)
+        self.logbox.configure(state="disabled")
+        self.toast_lbl = tk.Label(activity, text="", fg=GREEN, bg=PANEL,
+                                  font=("Segoe UI", 8))
+        self.toast_lbl.pack(side="right", padx=10)
 
         if self.state:
             self._render_board()
@@ -1040,41 +1145,43 @@ class App(tk.Tk):
         for w in self.host_bar.winfo_children():
             w.destroy()
         # collapsible header
-        hdr = tk.Frame(self.host_bar, bg=BG); hdr.pack(fill="x")
+        hdr = tk.Frame(self.host_bar, bg=PANEL); hdr.pack(fill="x", padx=8, pady=5)
         self._host_toggle = self._button(hdr, "", self._toggle_host_controls, small=True)
         self._host_toggle.pack(side="left")
+        tk.Label(hdr, text="Right-click an item to manage ownership",
+                 fg=MUTED, bg=PANEL, font=("Segoe UI", 8)).pack(side="right", padx=6)
 
         # the controls themselves live in a frame we can hide
-        self.host_ctrls = tk.Frame(self.host_bar, bg=BG)
+        self.host_ctrls = tk.Frame(self.host_bar, bg=PANEL)
         c = self.host_ctrls
         # mode selector first; its single timing parameter sits right after it.
-        tk.Label(c, text="mode", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(2, 4))
+        self._field_label(c, "GAME MODE").pack(side="left", padx=(2, 6))
         self.mode_var = tk.StringVar(value="normal")
         cb = ttk.Combobox(c, textvariable=self.mode_var, state="readonly", width=11,
-                          values=["normal", "hot_potato", "chaos", "custom"])
+                          values=["normal", "hot_potato", "chaos", "custom"],
+                          style="HL.TCombobox")
         cb.pack(side="left")
         cb.bind("<<ComboboxSelected>>", lambda e: self._on_mode_pick())
         # steal cooldown — Normal only (you can claim/steal there)
         self.cd_group = tk.Frame(c, bg=BG)
-        tk.Label(self.cd_group, text="steal cooldown", fg=MUTED, bg=BG,
+        self.cd_group.configure(bg=PANEL)
+        tk.Label(self.cd_group, text="steal cooldown", fg=MUTED, bg=PANEL,
                  font=("Segoe UI", 9)).pack(side="left", padx=(8, 2))
         self.e_cd = self._entry(self.cd_group); self.e_cd.configure(width=4); self.e_cd.pack(side="left")
-        tk.Label(self.cd_group, text="s", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(2, 0))
+        tk.Label(self.cd_group, text="s", fg=MUTED, bg=PANEL, font=("Segoe UI", 9)).pack(side="left", padx=(2, 0))
         self.cd_group.pack(side="left")
         # shuffle interval — hot potato / chaos only
-        self.shuffle_group = tk.Frame(c, bg=BG)
-        tk.Label(self.shuffle_group, text="shuffle every", fg=MUTED, bg=BG,
+        self.shuffle_group = tk.Frame(c, bg=PANEL)
+        tk.Label(self.shuffle_group, text="shuffle every", fg=MUTED, bg=PANEL,
                  font=("Segoe UI", 9)).pack(side="left", padx=(8, 2))
         self.e_shuffle = self._entry(self.shuffle_group); self.e_shuffle.configure(width=4)
         self.e_shuffle.pack(side="left")
-        tk.Label(self.shuffle_group, text="s", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(2, 0))
+        tk.Label(self.shuffle_group, text="s", fg=MUTED, bg=PANEL, font=("Segoe UI", 9)).pack(side="left", padx=(2, 0))
         self.shuffle_group.pack(side="left")
         self._apply_btn = self._button(c, "Apply", self._apply_host, small=True)
         self._apply_btn.pack(side="left", padx=8)
         self._custom_btn = self._button(c, "Customize ruleset…", self._open_rules, small=True)
         # packed/unpacked by _sync_mode_fields
-        tk.Label(c, text="· click player=remove · right-click item=manage",
-                 fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=8)
         self._sync_mode_fields()
         self._apply_host_collapse()
 
@@ -1106,51 +1213,67 @@ class App(tk.Tk):
         if win is not None and win.winfo_exists():
             win.lift(); return
         win = tk.Toplevel(self); win.title("Custom ruleset"); win.configure(bg=BG)
-        win.transient(self); win.geometry("600x700")
+        win.transient(self); win.geometry("720x760"); win.minsize(660, 700)
         self._rules_win = win
         win.protocol("WM_DELETE_WINDOW", lambda: (setattr(self, "_rules_win", None), win.destroy()))
 
-        tk.Label(win, text="🎛️ Custom ruleset", fg=ACCENT, bg=BG,
-                 font=(self.logo_font, 13, "bold")).pack(anchor="w", padx=14, pady=(12, 2))
-        pf = tk.Frame(win, bg=BG); pf.pack(fill="x", padx=14, pady=(2, 6))
-        tk.Label(pf, text="Start from:", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
+        head = tk.Frame(win, bg=BG); head.pack(fill="x", padx=18, pady=(14, 10))
+        self._eyebrow(head, "Host tools").pack(anchor="w")
+        tk.Label(head, text="Custom ruleset", fg=INK, bg=BG,
+                 font=(self.logo_font, 16, "bold")).pack(anchor="w", pady=(2, 2))
+        tk.Label(head, text="Compose how claiming, leases, raids, and shuffles interact.",
+                 fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(anchor="w")
+
+        presets = tk.Frame(win, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+        presets.pack(fill="x", padx=18, pady=(0, 10))
+        self._field_label(presets, "START FROM A PRESET").grid(
+            row=0, column=0, columnspan=4, sticky="w", padx=10, pady=(8, 5))
         for name in ("normal", "hot_potato", "chaos", "cutthroat", "lease", "raid", "siege"):
-            self._button(pf, name, lambda n=name: self._fill_rules({**RULE_DEFAULTS, **RULE_PRESETS[n]}),
-                         small=True).pack(side="left", padx=2)
+            idx = ("normal", "hot_potato", "chaos", "cutthroat", "lease", "raid", "siege").index(name)
+            label = name.replace("_", " ").title()
+            self._button(presets, label,
+                         lambda n=name: self._fill_rules({**RULE_DEFAULTS, **RULE_PRESETS[n]}),
+                         small=True).grid(row=1 + idx // 4, column=idx % 4, sticky="ew",
+                                          padx=5, pady=(0, 7))
+        for col in range(4):
+            presets.grid_columnconfigure(col, weight=1, uniform="presets")
 
         self._rules_summary_lbl = tk.Label(
             win, text="", fg=INK, bg=PANEL, font=("Segoe UI", 9), wraplength=560,
             justify="left", anchor="w", highlightbackground=LINE, highlightthickness=1, padx=8, pady=6)
-        self._rules_summary_lbl.pack(fill="x", padx=14, pady=(2, 8))
+        self._rules_summary_lbl.pack(fill="x", padx=18, pady=(0, 10))
 
-        body = tk.Frame(win, bg=BG); body.pack(fill="both", expand=True, padx=14)
+        body = tk.Frame(win, bg=BG); body.pack(fill="both", expand=True, padx=18)
         self._rule_vars = {}
         for title, fields in RULE_FIELDS:
-            sec = tk.Frame(body, bg=BG, highlightbackground=LINE, highlightthickness=1)
-            sec.pack(fill="x", pady=(0, 8))
-            tk.Label(sec, text=title, fg=ACCENT2, bg=BG,
+            sec = tk.Frame(body, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+            sec.pack(fill="x", pady=(0, 7))
+            tk.Label(sec, text=title, fg=ACCENT, bg=PANEL,
                      font=("Segoe UI Semibold", 9)).pack(anchor="w", padx=8, pady=(6, 2))
             for key, kind, label, choices in fields:
-                row = tk.Frame(sec, bg=BG); row.pack(fill="x", padx=10, pady=2)
+                row = tk.Frame(sec, bg=PANEL); row.pack(fill="x", padx=10, pady=2)
                 if kind == "bool":
                     var = tk.BooleanVar()
-                    tk.Checkbutton(row, text=label, variable=var, fg=INK, bg=BG, selectcolor=PANEL2,
-                                   activebackground=BG, activeforeground=INK, font=("Segoe UI", 9),
+                    tk.Checkbutton(row, text=label, variable=var, fg=INK, bg=PANEL, selectcolor=PANEL2,
+                                   activebackground=PANEL, activeforeground=INK, font=("Segoe UI", 9),
                                    command=self._refresh_rules).pack(side="left")
                 elif kind == "enum":
-                    tk.Label(row, text=label, fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left")
+                    tk.Label(row, text=label, fg=MUTED, bg=PANEL, font=("Segoe UI", 9),
+                             width=24, anchor="w").pack(side="left")
                     var = tk.StringVar()
-                    cbx = ttk.Combobox(row, textvariable=var, state="readonly", width=14, values=choices)
+                    cbx = ttk.Combobox(row, textvariable=var, state="readonly", width=16,
+                                       values=choices, style="HL.TCombobox")
                     cbx.pack(side="left", padx=6)
                     cbx.bind("<<ComboboxSelected>>", lambda e: self._refresh_rules())
                 else:                                       # numeric
-                    tk.Label(row, text=label, fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left")
+                    tk.Label(row, text=label, fg=MUTED, bg=PANEL, font=("Segoe UI", 9),
+                             width=24, anchor="w").pack(side="left")
                     var = tk.StringVar()
                     ent = self._entry(row); ent.configure(width=6, textvariable=var); ent.pack(side="left", padx=6)
                     var.trace_add("write", lambda *a: self._refresh_rules())
                 self._rule_vars[key] = (kind, var)
 
-        af = tk.Frame(win, bg=BG); af.pack(fill="x", padx=14, pady=10)
+        af = tk.Frame(win, bg=BG); af.pack(fill="x", padx=18, pady=12)
         self._button(af, "Apply ruleset", self._apply_rules, primary=True).pack(side="right")
         self._button(af, "Cancel",
                      lambda: (setattr(self, "_rules_win", None), win.destroy())).pack(side="right", padx=6)
@@ -1209,14 +1332,14 @@ class App(tk.Tk):
             return
         if self._host_collapsed:
             self.host_ctrls.pack_forget()
-            self._host_toggle.config(text="▸ ★ Host controls")
+            self._host_toggle.config(text="▸  Host settings")
         else:
-            self.host_ctrls.pack(fill="x", pady=(3, 0))
-            self._host_toggle.config(text="▾ ★ Host controls")
+            self.host_ctrls.pack(fill="x", padx=10, pady=(2, 10))
+            self._host_toggle.config(text="▾  Host settings")
 
     def _room_title(self):
         name = (self.state or {}).get("name") or self.room.get("name") or "Co-op"
-        return f"{name}  ·  {self.room['code']}"
+        return name
 
     def _rename_room(self):
         from tkinter import simpledialog
@@ -1273,7 +1396,7 @@ class App(tk.Tk):
         label = {"chaos": "Chaos", "hot_potato": "Hot Potato", "custom": "Custom"}.get(mode, "Custom")
         self.mode_banner.config(text=f"{icon} {label} — {summary}{nxt}",
                                 fg=color, highlightbackground=color)
-        self.mode_banner.pack(fill="x", pady=(0, 6), before=self.board_wrap)
+        self.mode_banner.pack(fill="x", pady=(0, 7), before=self.board_head)
 
     # ── board rendering ─────────────────────────────────────────────────────
     def _render_players(self):
@@ -1283,20 +1406,28 @@ class App(tk.Tk):
         for p in self.state.get("players", []):
             color = GREEN if (p.get("agent") and p.get("emu")) else (
                 GOLD if p.get("agent") else DIM)
-            chip = tk.Frame(self.players_row, bg=BG); chip.pack(side="left", padx=(0, 10))
-            c = tk.Canvas(chip, width=12, height=12, bg=BG, highlightthickness=0); c.pack(side="left")
+            chip = tk.Frame(self.players_row, bg=PANEL2, highlightbackground=LINE,
+                            highlightthickness=1)
+            chip.pack(side="left", padx=(0, 7), pady=5)
+            c = tk.Canvas(chip, width=12, height=12, bg=PANEL2, highlightthickness=0)
+            c.pack(side="left", padx=(7, 2))
             self._dot(c, color)
             av = self._avatar_image(p.get("avatar"), 18)
             if av is not None:
-                al = tk.Label(chip, image=av, bg=BG); al.image = av
+                al = tk.Label(chip, image=av, bg=PANEL2); al.image = av
                 al.pack(side="left", padx=(3, 3))
-            star = "★ " if p["id"] == self.state.get("host") else ""
-            you = " (you)" if p["id"] == self.state.get("you") else ""
-            lbl = tk.Label(chip, text=f"{star}{p['name']}{you}", fg=INK, bg=BG, font=("Segoe UI", 9))
-            lbl.pack(side="left")
+            is_room_host = p["id"] == self.state.get("host")
+            is_you = p["id"] == self.state.get("you")
+            suffix = "  YOU" if is_you else ("  HOST" if is_room_host else "")
+            lbl = tk.Label(chip, text=f"{p['name']}{suffix}", fg=INK, bg=PANEL2,
+                           font=("Segoe UI Semibold", 8))
+            lbl.pack(side="left", padx=(3, 7), pady=5)
             if host and p["id"] != self.state.get("host"):
-                lbl.configure(cursor="hand2")
-                lbl.bind("<Button-1>", lambda e, pid=p["id"], nm=p["name"]: self._remove_player(pid, nm))
+                remove = tk.Button(chip, text="×", relief="flat", bd=0, cursor="hand2",
+                                   bg=PANEL2, fg=MUTED, activebackground=RED,
+                                   activeforeground="#ffffff", font=("Segoe UI", 10), padx=5,
+                                   command=lambda pid=p["id"], nm=p["name"]: self._remove_player(pid, nm))
+                remove.pack(side="right", padx=(0, 2))
 
     def _remove_player(self, pid, name):
         if messagebox.askyesno("HyruleLink", f"Remove {name} from the room?"):
@@ -1413,7 +1544,7 @@ class App(tk.Tk):
                 self.rename_btn.pack_forget()
         self._render_players()
         if self._is_host():
-            self.host_bar.pack(fill="x", pady=(0, 6), before=self.board_wrap)
+            self.host_bar.pack(fill="x", pady=(0, 8), before=self.board_head)
             if not self.e_cd.get():
                 self.e_cd.insert(0, str(int(self.state.get("cooldown_s", 5))))
             self.mode_var.set(self.state.get("mode", "normal"))
@@ -1433,7 +1564,7 @@ class App(tk.Tk):
             cat = {"key": it.key, "name": it.name}
             e = ledger.get(it.key)
             self._card(self.board, cat, e).grid(row=i // cols, column=i % cols,
-                                                 padx=4, pady=3, sticky="nsew")
+                                                 padx=4, pady=4, sticky="nsew")
         # equal-width columns that stretch to fill the canvas (wider, fewer rows)
         for c in range(cols):
             self.board.grid_columnconfigure(c, weight=1, minsize=CARD_MIN_PX, uniform="items")
@@ -1447,7 +1578,7 @@ class App(tk.Tk):
         w = self.canvas.winfo_width() if hasattr(self, "canvas") else 0
         if w <= 1:
             w = 1040                              # pre-layout default (window width-ish)
-        return max(4, min(10, w // CARD_MIN_PX))
+        return max(4, min(8, w // CARD_MIN_PX))
 
     def _on_canvas_resize(self, event):
         # keep the grid as wide as the viewport, and reflow columns when the count
@@ -1458,39 +1589,38 @@ class App(tk.Tk):
 
     def _card(self, parent, cat, e):
         you = self.state.get("you")
-        border = LINE
         mine = e and e.get("owner") == you
-        if e:
-            owner = e.get("owner_name") or "unowned"
-            sub = f"held by {owner}"
-            if e.get("owner"):
-                border = GREEN if mine else BLUE
-            if e.get("tier") and e["tier"] != "—":   # icon shows tier too; label it briefly
-                sub = f"{e['tier']} · {sub}"
-        else:
-            sub = "undiscovered"
-        card = tk.Frame(parent, bg=PANEL, highlightbackground=GREEN if mine else border,
+        owned = bool(e and e.get("owner"))
+        bg = CARD_MINE if mine else (CARD_OWNED if owned else CARD)
+        border = ACCENT if mine else (BLUE if owned else LINE)
+        card = tk.Frame(parent, bg=bg, height=CARD_H, highlightbackground=border,
                         highlightthickness=2 if mine else 1)
-        # Vertical tile: centered sprite, name + status below. Giving the name the
-        # full card width keeps it on one line even in a dense, narrow grid.
-        # Resolve the sprite locally from key+level so icons work against ANY
-        # server (the public host may not send an `image` field).
+        card.pack_propagate(False)
+        tk.Frame(card, bg=border if e else LINE, height=2).pack(fill="x")
+
         level = e.get("level", 0) if e else 0
         icon = self._item_icon(item_image(cat["key"], level), dim=not e)
         if icon is not None:
-            il = tk.Label(card, image=icon, bg=PANEL)
-            il.image = icon                      # extra ref guard (cache also holds it)
-            il.pack(pady=(4, 1))
-        tk.Label(card, text=cat["name"], fg=INK, bg=PANEL, font=("Segoe UI Semibold", 9),
-                 wraplength=CARD_MIN_PX, justify="center").pack(fill="x", padx=3)
-        # sub line: owner avatar (if any) + "held by …" / "undiscovered"
-        owner_av = self._avatar_image(self._player_avatar_url(e.get("owner")), 16) if e else None
-        subf = tk.Frame(card, bg=PANEL); subf.pack(fill="x", padx=3)
-        inner = tk.Frame(subf, bg=PANEL); inner.pack()
+            il = tk.Label(card, image=icon, bg=bg)
+            il.image = icon
+            il.pack(pady=(6, 1))
+        tk.Label(card, text=cat["name"], fg=INK if e else MUTED, bg=bg,
+                 font=("Segoe UI Semibold", 9), wraplength=CARD_MIN_PX - 12,
+                 justify="center").pack(fill="x", padx=6)
+
+        owner_av = self._avatar_image(self._player_avatar_url(e.get("owner")), 14) if e else None
+        meta = tk.Frame(card, bg=bg); meta.pack(fill="x", padx=5, pady=(1, 0))
+        inner = tk.Frame(meta, bg=bg); inner.pack()
         if owner_av is not None:
-            al = tk.Label(inner, image=owner_av, bg=PANEL); al.image = owner_av
+            al = tk.Label(inner, image=owner_av, bg=bg); al.image = owner_av
             al.pack(side="left", padx=(0, 3))
-        tk.Label(inner, text=sub, fg=MUTED, bg=PANEL, font=("Segoe UI", 8)).pack(side="left")
+        if not e:
+            meta_text = "Not discovered"
+        else:
+            owner = e.get("owner_name") or "Unowned"
+            tier = e.get("tier") if e.get("tier") and e.get("tier") != "—" else ""
+            meta_text = f"{tier} · {owner}" if tier else owner
+        tk.Label(inner, text=meta_text, fg=MUTED, bg=bg, font=("Segoe UI", 8)).pack(side="left")
 
         mode = self.state.get("mode", "normal")
         claiming = self.state.get("claiming", mode == "normal")
@@ -1499,49 +1629,47 @@ class App(tk.Tk):
         shared_found = bool(e and rules.get("shared_discovery") and e.get("discovered"))
         found_for_claim = bool(e and (you in e.get("discovered", []) or shared_found))
         open_scope = rules.get("open_season_scope", "owned")
-        action = tk.Frame(card, bg=PANEL); action.pack(pady=(1, 4))
+        action = tk.Frame(card, bg=bg); action.pack(side="bottom", fill="x", padx=7, pady=(2, 7))
+        action_text, action_color, button_label = "", MUTED, None
         if not e:
             if claiming and not need_found and open_scope == "any":
-                self._button(action, "Claim",
-                             lambda k=cat["key"]: self._ui_send({"type": "claim", "item": k}),
-                             small=True).pack()
+                button_label = "Claim"
             else:
-                tk.Label(action, text="—", fg=MUTED, bg=PANEL, font=("Segoe UI", 8)).pack()
+                action_text = "—"
         elif not claiming:
-            # no manual claiming — just show ownership
             if mine:
-                tk.Label(action, text="✓ yours", fg=GREEN, bg=PANEL,
-                         font=("Segoe UI Semibold", 9)).pack()
+                action_text, action_color = "✓  YOURS", GREEN
             elif not e.get("owner"):
-                tk.Label(action, text="—", fg=MUTED, bg=PANEL, font=("Segoe UI", 8)).pack()
+                action_text = "—"
         elif mine:
-            tk.Label(action, text="✓ you hold this", fg=GREEN, bg=PANEL,
-                     font=("Segoe UI Semibold", 9)).pack()
+            action_text, action_color = "✓  YOURS", GREEN
         elif e.get("locked"):
-            tk.Label(action, text="🔒 secured", fg=GOLD, bg=PANEL, font=("Segoe UI", 8)).pack()
+            action_text, action_color = "🔒  SECURED", GOLD
         elif ((need_found and not found_for_claim)
               or (not need_found and open_scope == "owned"
                   and not e.get("owner") and not found_for_claim)):
-            tk.Label(action, text="find one to claim", fg=GOLD, bg=PANEL,
-                     font=("Segoe UI", 8)).pack()
+            action_text, action_color = "FIND ONE TO CLAIM", GOLD
         elif e.get("cooldown_remaining", 0) > 0.05:
-            tk.Label(action, text=f"cooldown {e['cooldown_remaining']:.0f}s", fg=MUTED, bg=PANEL,
-                     font=("Segoe UI", 8)).pack()
+            action_text = f"COOLDOWN  {e['cooldown_remaining']:.0f}s"
         else:
-            label = "Steal" if (not need_found and e.get("owner") and not mine) else "Claim"
-            self._button(action, label, lambda k=cat["key"]: self._ui_send({"type": "claim", "item": k}),
-                         small=True).pack()
-        # timers shared across modes: hold (hot-potato), borrow lease
+            button_label = "Steal" if (not need_found and e.get("owner") and not mine) else "Claim"
+
         if e and e.get("owner") and e.get("hold_remaining") is not None:
-            tk.Label(action, text=f"⏱ {self._clock(e['hold_remaining'])}", fg=GOLD, bg=PANEL,
-                     font=("Segoe UI", 8)).pack()
+            action_text, action_color = f"⏱  {self._clock(e['hold_remaining'])}", GOLD
+            button_label = None
         if e and e.get("borrow_remaining") is not None:
-            tk.Label(action, text=f"⏳ {self._clock(e['borrow_remaining'])}", fg=ACCENT2, bg=PANEL,
-                     font=("Segoe UI", 8)).pack()
-        # hover: brighten the card's edge as the pointer moves over it. Bound
-        # across all children (add="+", debounced) so crossing inner widgets
-        # doesn't flicker the highlight off.
-        norm = GREEN if mine else border
+            action_text, action_color = f"⏳  {self._clock(e['borrow_remaining'])}", ACCENT2
+            button_label = None
+
+        if button_label:
+            self._button(action, button_label,
+                         lambda k=cat["key"]: self._ui_send({"type": "claim", "item": k}),
+                         primary=True, small=True).pack(fill="x")
+        else:
+            tk.Label(action, text=action_text or " ", fg=action_color, bg=bg,
+                     font=(self.mono_font, 7)).pack(fill="x")
+
+        norm = border
         hover = _lighten(norm, 0.32)
 
         def _hov_on(_):
@@ -1831,7 +1959,7 @@ class App(tk.Tk):
                 self.cfg["core_path"] = self._guess_core(emu)
             save_settings(self.cfg)
             if hasattr(self, "emu_summary_lbl"):
-                self.emu_summary_lbl.config(text="Emulator: " + self._emu_summary())
+                self.emu_summary_lbl.config(text=self._emu_summary())
             win.destroy()
 
         bar = tk.Frame(win, bg=BG); bar.pack(anchor="w", pady=12, **pad)
@@ -1910,7 +2038,7 @@ class App(tk.Tk):
             if kind == "done":
                 self._log(f"✓ Seed ready: {os.path.basename(a)} — click Launch emulator.")
                 if hasattr(self, "emu_summary_lbl"):
-                    self.emu_summary_lbl.config(text="Emulator: " + self._emu_summary())
+                    self.emu_summary_lbl.config(text=self._emu_summary())
                 messagebox.showinfo("HyruleLink",
                     f"Open seed generated and set as your ROM:\n{a}\n\nClick “Launch emulator”.")
             else:
@@ -1950,17 +2078,16 @@ class App(tk.Tk):
                 self.lbl_emu.config(text="emulator: " + (label if ok else "not linked"))
                 if hasattr(self, "emu_line"):
                     self.emu_line.config(
-                        text=("✓ " + label + " — press Connect & Play") if ok
-                        else "No emulator found — start snes9x-nwa / RetroArch / QUsb2Snes/SNI "
-                             "(see “Which emulators?”), or click Launch emulator",
+                        text=("Ready to link · " + label) if ok
+                        else "No emulator detected. Start one or use Launch; Emulator help covers other setups.",
                         fg=GREEN if ok else MUTED)
             else:
                 emu_ok = getattr(self.transport, "connected", False)
                 self._dot(self.dot_emu, GREEN if emu_ok else GOLD)
                 self.lbl_emu.config(text="emulator: " + ("linked" if emu_ok else "waiting…"))
                 if hasattr(self, "emu_line"):
-                    self.emu_line.config(text="● Linked — your pickups + claims are live"
-                                         if emu_ok else "Linking… (load your seed if you haven't)",
+                    self.emu_line.config(text="Live sync is active — pickups and claims update instantly."
+                                         if emu_ok else "Waiting for the emulator — load your seed to finish linking.",
                                          fg=GREEN if emu_ok else GOLD)
         else:
             self._dot(self.dot_emu, DIM); self._dot(self.dot_srv, DIM)

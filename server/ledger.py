@@ -444,6 +444,40 @@ class RoomHub:
         except Exception:
             pass
 
+    async def _notify_transfers(self, code: str, grants, revokes, summary=None):
+        """Send concise, player-specific emulator notifications after item moves."""
+        room = self.rooms.get(code)
+        if room is None:
+            return
+        if summary:
+            for ws in self.agents.get(code, {}).values():
+                await self._send(ws, {"type": P.NOTIFY, "text": summary})
+            return
+        keys = {key for _, key, *_ in grants} | {key for _, key in revokes}
+        if len(keys) > 1:
+            for ws in self.agents.get(code, {}).values():
+                await self._send(ws, {"type": P.NOTIFY, "text": "Items updated"})
+            return
+        for key in keys:
+            item = BY_KEY.get(key)
+            if item is None:
+                continue
+            new_owner = next((uid for uid, ikey, _ in grants if ikey == key), None)
+            old_owners = [uid for uid, ikey in revokes if ikey == key and uid != new_owner]
+            new_name = room.names.get(new_owner, "another player") if new_owner is not None else None
+            old_name = room.names.get(old_owners[0], "another player") if old_owners else None
+            if new_owner is not None and old_name:
+                ws = self.agents.get(code, {}).get(new_owner)
+                if ws:
+                    await self._send(ws, {"type": P.NOTIFY,
+                                          "text": f"{item.name} stolen from {old_name}"})
+            for old_owner in old_owners:
+                ws = self.agents.get(code, {}).get(old_owner)
+                if ws:
+                    text = (f"{item.name} stolen by {new_name}"
+                            if new_name else f"{item.name} released")
+                    await self._send(ws, {"type": P.NOTIFY, "text": text})
+
     async def dispatch(self, code: str, eff: Effects, key: str):
         room = self.rooms.get(code)
         if room is None:        # room was deleted out from under an in-flight action
@@ -457,6 +491,7 @@ class RoomHub:
             ws = self.agents.get(code, {}).get(uid)
             if ws:
                 await self._send(ws, {"type": P.REVOKE, "item": ikey})
+        await self._notify_transfers(code, eff.grants, eff.revokes)
         if eff.changed:
             self._persist(room, key)
         if eff.event:
@@ -766,6 +801,7 @@ class RoomHub:
                 or any(it.borrowed for it in room.items.values())):
             return                                    # no time-based rules → nothing to do
         grants, revokes, events = [], [], []
+        notification = None
 
         # 1. borrow leases expire → revert to previous owner, else the pool
         for key, it in room.items.items():
@@ -861,14 +897,15 @@ class RoomHub:
                 moved += 1
             if moved:
                 events.append("🌀 Chaos shuffle! Items moved.")
+                notification = "Items shuffled"
 
         if grants or revokes:
-            await self._send_commands(code, grants, revokes)
+            await self._send_commands(code, grants, revokes, notification)
             for ev in events:
                 await self.broadcast_event(code, ev)
             await self.broadcast_state(code)
 
-    async def _send_commands(self, code, grants, revokes):
+    async def _send_commands(self, code, grants, revokes, notification=None):
         db.touch_room(code)
         for (uid, key, level) in grants:
             ws = self.agents.get(code, {}).get(uid)
@@ -878,6 +915,7 @@ class RoomHub:
             ws = self.agents.get(code, {}).get(uid)
             if ws:
                 await self._send(ws, {"type": P.REVOKE, "item": key})
+        await self._notify_transfers(code, grants, revokes, notification)
 
     async def drop_room(self, code: str):
         """Tear a room down: close every live connection and forget it in memory

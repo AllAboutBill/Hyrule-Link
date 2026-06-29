@@ -10,6 +10,14 @@ from shared import protocol as P
 from shared.items import ITEMS
 
 
+class FakeWebSocket:
+    def __init__(self):
+        self.messages = []
+
+    async def send_json(self, payload):
+        self.messages.append(payload)
+
+
 class LedgerTests(unittest.TestCase):
     def room(self):
         room = RoomState("TEST")
@@ -68,6 +76,27 @@ class LedgerTests(unittest.TestCase):
         hub.rooms[room.code] = room
         asyncio.run(hub.admin_set_owner(room.code, 999, "sword"))
         self.assertNotIn("sword", room.items)
+
+    def test_transfer_notifications_are_targeted(self):
+        hub = RoomHub()
+        room = self.room()
+        hub.rooms[room.code] = room
+        old_ws, new_ws = FakeWebSocket(), FakeWebSocket()
+        hub.agents[room.code] = {1: old_ws, 2: new_ws}
+        asyncio.run(hub._notify_transfers(
+            room.code, [(2, "sword", 1)], [(1, "sword")]))
+        self.assertEqual(old_ws.messages[-1]["text"], "Sword stolen by B")
+        self.assertEqual(new_ws.messages[-1]["text"], "Sword stolen from A")
+
+    def test_shuffle_notification_is_broadcast_once(self):
+        hub = RoomHub()
+        room = self.room()
+        hub.rooms[room.code] = room
+        first, second = FakeWebSocket(), FakeWebSocket()
+        hub.agents[room.code] = {1: first, 2: second}
+        asyncio.run(hub._notify_transfers(room.code, [], [], "Items shuffled"))
+        self.assertEqual(first.messages, [{"type": P.NOTIFY, "text": "Items shuffled"}])
+        self.assertEqual(second.messages, [{"type": P.NOTIFY, "text": "Items shuffled"}])
 
 
 if __name__ == "__main__":

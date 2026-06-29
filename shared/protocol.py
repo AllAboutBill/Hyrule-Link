@@ -19,6 +19,7 @@ ui     -> server
 server -> agent
   grant     {type, item, level}      # enable item at this level in your game
   revoke    {type, item}             # disable item in your game
+  notify    {type, text}             # emulator-native on-screen notification
   reject    {type, reason}
 
 server -> ui  (and broadcast on any change)
@@ -51,6 +52,7 @@ ADMIN_SET_NAME = "admin_set_name"             # {name}  rename the room
 # server -> agent
 GRANT = "grant"
 REVOKE = "revoke"
+NOTIFY = "notify"
 
 # server -> ui
 STATE = "state"

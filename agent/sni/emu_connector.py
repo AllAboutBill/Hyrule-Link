@@ -258,6 +258,18 @@ class _RetroArchClient:
         except OSError:
             return False
 
+    def show_message(self, text):
+        """Display a short message through RetroArch's built-in OSD."""
+        try:
+            self._ensure_sock()
+            clean = " ".join(str(text).split())[:120]
+            if not clean:
+                return False
+            self._sock.sendto(f"SHOW_MSG {clean}\n".encode("utf-8", "replace"), self.addr)
+            return True
+        except OSError:
+            return False
+
     def close(self):
         if self._sock:
             try:
@@ -367,3 +379,10 @@ class EmuConnector:
             if client is None:
                 return False
             return client.reset_console()
+
+    def show_message(self, text):
+        """Use an emulator-native OSD when the active transport supports one."""
+        with self._lock:
+            client = self._active_client()
+            show = getattr(client, "show_message", None) if client is not None else None
+            return bool(show and show(text))
