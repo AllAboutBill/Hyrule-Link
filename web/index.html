@@ -95,12 +95,6 @@
           </label>
           <button id="admin-name-apply" class="small">Rename</button>
         </div>
-        <div class="admin-row" id="admin-cooldown-row">
-          <label>Steal cooldown
-            <input id="admin-cooldown" type="number" min="0" step="1" style="width:5em" /> s
-          </label>
-          <button id="admin-cooldown-apply" class="small">Apply</button>
-        </div>
         <div class="admin-row">
           <label>Game mode
             <select id="admin-mode">
@@ -108,6 +102,9 @@
               <option value="hot_potato">🔥 Hot Potato</option>
               <option value="chaos">🌀 Chaos</option>
             </select>
+          </label>
+          <label id="admin-cooldown-wrap">steal cooldown
+            <input id="admin-cooldown" type="number" min="0" step="1" style="width:5em" /> s
           </label>
           <label id="admin-shuffle-wrap" class="hidden">shuffle every
             <input id="admin-shuffle" type="number" min="5" step="5" style="width:5em" /> s

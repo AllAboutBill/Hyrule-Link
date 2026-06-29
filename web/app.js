@@ -538,25 +538,32 @@ $("btn-join").onclick = () => joinRoom();
 $("btn-leave").onclick = leaveRoom;
 $("btn-connect-game").onclick = () => $("agent-help").classList.toggle("hidden");
 $("rooms-refresh").onclick = loadRooms;
-$("admin-cooldown-apply").onclick = () =>
-  sendWS({ type: "admin_set_cooldown", seconds: Number($("admin-cooldown").value) || 0 });
 $("admin-name-apply").onclick = () => {
   const v = ($("admin-name").value || "").trim();
   if (v) sendWS({ type: "admin_set_name", name: v });
 };
-$("admin-mode-apply").onclick = () =>
-  sendWS({ type: "admin_set_mode", mode: $("admin-mode").value,
-           seconds: Number($("admin-shuffle").value) || 120 });
+// One Apply for the mode row: send only what changed, so re-applying the same
+// mode doesn't reset the shuffle timer / spam an event on the server.
+$("admin-mode-apply").onclick = () => {
+  const mode = $("admin-mode").value;
+  const shuffle = Number($("admin-shuffle").value) || 120;
+  const cooldown = Number($("admin-cooldown").value) || 0;
+  const modeChanged = mode !== state.mode;
+  const shuffleChanged = mode !== "normal" && Math.round(shuffle) !== Math.round(state.shuffle_s || 120);
+  if (modeChanged || shuffleChanged) sendWS({ type: "admin_set_mode", mode, seconds: shuffle });
+  if (mode === "normal" && Math.round(cooldown) !== Math.round(state.cooldown_s || 0))
+    sendWS({ type: "admin_set_cooldown", seconds: cooldown });
+};
 
 // Steal cooldown only applies in Normal (you claim/steal there); "shuffle every…"
-// only applies in the shuffle modes. Show each field only where it's used, and
-// update live as the host changes the dropdown.
+// only applies in the shuffle modes. Both sit right after the mode selector;
+// show only the one the chosen mode uses, updating live on dropdown change.
 function updateShuffleVisibility() {
   const ms = $("admin-mode");
   if (!ms) return;
   const normal = ms.value === "normal";
   const sh = $("admin-shuffle-wrap"); if (sh) sh.classList.toggle("hidden", normal);
-  const cd = $("admin-cooldown-row"); if (cd) cd.classList.toggle("hidden", !normal);
+  const cd = $("admin-cooldown-wrap"); if (cd) cd.classList.toggle("hidden", !normal);
 }
 $("admin-mode").addEventListener("change", updateShuffleVisibility);
 
