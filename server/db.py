@@ -37,8 +37,9 @@ CREATE TABLE IF NOT EXISTS rooms (
     pub_id          TEXT,               -- public watch handle (safe to list)
     host_player_id  INTEGER,
     cooldown_s      REAL NOT NULL DEFAULT 5,
-    mode            TEXT NOT NULL DEFAULT 'normal',  -- normal | hot_potato | chaos
+    mode            TEXT NOT NULL DEFAULT 'normal',  -- normal | hot_potato | chaos | custom
     shuffle_s       REAL NOT NULL DEFAULT 120,       -- shuffle-mode interval (seconds)
+    rules           TEXT,                            -- custom ruleset (JSON); null = derive from mode
     created_at      REAL NOT NULL,
     last_active     REAL
 );
@@ -93,6 +94,8 @@ def init():
             _conn.execute("ALTER TABLE rooms ADD COLUMN mode TEXT NOT NULL DEFAULT 'normal'")
         if "shuffle_s" not in cols:
             _conn.execute("ALTER TABLE rooms ADD COLUMN shuffle_s REAL NOT NULL DEFAULT 120")
+        if "rules" not in cols:
+            _conn.execute("ALTER TABLE rooms ADD COLUMN rules TEXT")
         # migrate older DBs: link players to a Discord user
         pcols = [r[1] for r in _conn.execute("PRAGMA table_info(players)").fetchall()]
         if "discord_id" not in pcols:
@@ -193,6 +196,10 @@ def update_cooldown(code: str, seconds: float):
 
 def update_mode(code: str, mode: str, shuffle_s: float):
     _q("UPDATE rooms SET mode=?, shuffle_s=? WHERE code=?", (mode, shuffle_s, code))
+
+
+def update_rules(code: str, rules_json):
+    _q("UPDATE rooms SET rules=? WHERE code=?", (rules_json, code))
 
 
 # ── players ──────────────────────────────────────────────────────────────

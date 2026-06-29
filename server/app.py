@@ -429,12 +429,14 @@ async def _serve_ui(ws, code, user_id, is_admin=False):
             else:
                 await hub.dispatch(code, eff, msg.get("item"))
         elif mtype in (P.ADMIN_SET_COOLDOWN, P.ADMIN_REMOVE_PLAYER, P.ADMIN_SET_DISCOVERED,
-                       P.ADMIN_SET_OWNER, P.ADMIN_SET_MODE, P.ADMIN_SET_NAME):
+                       P.ADMIN_SET_OWNER, P.ADMIN_SET_MODE, P.ADMIN_SET_RULES, P.ADMIN_SET_NAME):
             if not (is_admin or user_id == hub.rooms[code].host):
                 await ws.send_json({"type": P.REJECT, "reason": "host only"})
                 continue
             if mtype == P.ADMIN_SET_COOLDOWN:
                 await hub.admin_set_cooldown(code, msg.get("seconds", 5))
+            elif mtype == P.ADMIN_SET_RULES:
+                await hub.admin_set_rules(code, msg.get("rules") or {})
             elif mtype == P.ADMIN_REMOVE_PLAYER:
                 await hub.admin_remove_player(code, int(msg.get("player_id")))
             elif mtype == P.ADMIN_SET_DISCOVERED:

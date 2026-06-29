@@ -16,6 +16,7 @@ Rules (locked with the user):
     item back and forth.
 """
 
+import json
 import random
 import time
 from dataclasses import dataclass, field
@@ -30,8 +31,127 @@ from server import db
 MODE_NORMAL = "normal"
 MODE_HOT_POTATO = "hot_potato"   # each held item passes to the next finder after N s
 MODE_CHAOS = "chaos"             # ALL found items randomly reassigned every N s
-MODES = (MODE_NORMAL, MODE_HOT_POTATO, MODE_CHAOS)
-MODE_LABELS = {MODE_NORMAL: "Normal", MODE_HOT_POTATO: "Hot Potato", MODE_CHAOS: "Chaos"}
+MODE_CUSTOM = "custom"           # host-composed ruleset (see DEFAULT_RULES)
+MODES = (MODE_NORMAL, MODE_HOT_POTATO, MODE_CHAOS, MODE_CUSTOM)
+MODE_LABELS = {MODE_NORMAL: "Normal", MODE_HOT_POTATO: "Hot Potato",
+               MODE_CHAOS: "Chaos", MODE_CUSTOM: "Custom"}
+
+
+# ── custom rules ───────────────────────────────────────────────────────────
+# The whole game is one rule engine; the named modes are just presets. A room
+# always carries a full effective ruleset (room.rules); resolve_claim and the
+# 1-second tick read it. See the design spec for what each knob does.
+DEFAULT_RULES = {
+    # A. claiming & stealing
+    "claiming":               True,
+    "require_found_to_claim": True,
+    "open_season_scope":      "owned",      # owned | any  (when found-gate is off)
+    "steal_cooldown_s":       5.0,
+    "cooldown_scope":         "item",       # item | thief | victim | none
+    "steal_back_lock_s":      0.0,
+    "steal_budget_per_min":   0,            # 0 = unlimited
+    # B. holding / leases
+    "hold_limit_s":           0.0,          # 0 = off
+    "hold_expiry":            "next_finder",# next_finder | release | return_finder
+    "tenure_lock_s":          0.0,          # 0 = off
+    "idle_release_s":         0.0,          # 0 = off
+    # C. raid (unfound steals)
+    "borrow_s":               0.0,          # 0 = permanent
+    "borrow_revert":          "prev_owner", # prev_owner | pool
+    # D. stackable layers
+    "auto_shuffle_s":         0.0,          # 0 = off (can run WITH claiming)
+    "shuffle_scope":          "all",        # all | unowned | idle
+    "shared_discovery":       False,
+}
+_RULE_BOOLS = ("claiming", "require_found_to_claim", "shared_discovery")
+_RULE_ENUMS = {
+    "open_season_scope": ("owned", "any"),
+    "cooldown_scope":    ("item", "thief", "victim", "none"),
+    "hold_expiry":       ("next_finder", "release", "return_finder"),
+    "borrow_revert":     ("prev_owner", "pool"),
+    "shuffle_scope":     ("all", "unowned", "idle"),
+}
+_RULE_NUMS = {   # field -> (min, max)
+    "steal_cooldown_s":     (0.0, 3600.0),
+    "steal_back_lock_s":    (0.0, 3600.0),
+    "steal_budget_per_min": (0, 120),
+    "hold_limit_s":         (0.0, 86400.0),
+    "tenure_lock_s":        (0.0, 86400.0),
+    "idle_release_s":       (0.0, 86400.0),
+    "borrow_s":             (0.0, 86400.0),
+    "auto_shuffle_s":       (0.0, 86400.0),
+}
+
+
+def clamp_rules(raw: dict) -> dict:
+    """Validate + clamp a client-supplied ruleset to the DEFAULT_RULES shape.
+    Never trust the client: unknown keys are dropped, values are coerced/bounded."""
+    out = dict(DEFAULT_RULES)
+    raw = raw or {}
+    for k in _RULE_BOOLS:
+        if k in raw:
+            out[k] = bool(raw[k])
+    for k, (lo, hi) in _RULE_NUMS.items():
+        if k in raw:
+            try:
+                v = int(raw[k]) if k == "steal_budget_per_min" else float(raw[k])
+                out[k] = max(lo, min(hi, v))
+            except (TypeError, ValueError):
+                pass
+    for k, choices in _RULE_ENUMS.items():
+        if raw.get(k) in choices:
+            out[k] = raw[k]
+    return out
+
+
+def preset_rules(mode: str, seconds=None) -> dict:
+    """The full ruleset a named preset resolves to (interval from `seconds`)."""
+    r = dict(DEFAULT_RULES)
+    try:
+        s = max(5.0, float(seconds)) if seconds else None
+    except (TypeError, ValueError):
+        s = None
+    if mode == MODE_HOT_POTATO:
+        r.update(claiming=False, hold_limit_s=(s or 120.0), hold_expiry="next_finder")
+    elif mode == MODE_CHAOS:
+        r.update(claiming=False, auto_shuffle_s=(s or 120.0), shuffle_scope="all")
+    return r
+
+
+def summarize_rules(r: dict) -> str:
+    """One-line plain-English summary of a ruleset (for the mode banner)."""
+    p = []
+    if r.get("claiming"):
+        if r.get("require_found_to_claim"):
+            p.append("claim found items")
+        else:
+            p.append("steal anything someone owns" if r.get("open_season_scope") == "owned"
+                     else "claim anything")
+        cd, scope = r.get("steal_cooldown_s", 0), r.get("cooldown_scope")
+        if cd and scope != "none":
+            p.append(f"{int(cd)}s {scope} cooldown")
+        if r.get("steal_back_lock_s"):
+            p.append(f"{int(r['steal_back_lock_s'])}s steal-back lock")
+        if r.get("steal_budget_per_min"):
+            p.append(f"max {int(r['steal_budget_per_min'])} steals/min")
+    else:
+        p.append("no manual claiming")
+    if r.get("hold_limit_s"):
+        ex = {"next_finder": "→ next finder", "release": "→ released",
+              "return_finder": "→ first finder"}.get(r.get("hold_expiry"), "")
+        p.append(f"hold {int(r['hold_limit_s'])}s {ex}".strip())
+    if r.get("tenure_lock_s"):
+        p.append(f"unstealable after {int(r['tenure_lock_s'])}s")
+    if r.get("idle_release_s"):
+        p.append(f"drop items when offline {int(r['idle_release_s'])}s")
+    if not r.get("require_found_to_claim") and r.get("borrow_s"):
+        rev = "to owner" if r.get("borrow_revert") == "prev_owner" else "to pool"
+        p.append(f"borrows revert {rev} after {int(r['borrow_s'])}s")
+    if r.get("auto_shuffle_s"):
+        p.append(f"reshuffle {r.get('shuffle_scope')} every {int(r['auto_shuffle_s'])}s")
+    if r.get("shared_discovery"):
+        p.append("shared discovery")
+    return " · ".join(p)
 
 
 # ── pure state ────────────────────────────────────────────────────────────
@@ -44,6 +164,10 @@ class ItemState:
     # user_id -> the highest tier THAT player has personally found. Membership
     # (the keys) is "has discovered it"; the value is that player's own tier.
     discovered: Dict[int, int] = field(default_factory=dict)
+    # "raid" borrow: held via an unfound steal, reverts when the lease ends.
+    borrowed: bool = False
+    borrow_until: float = 0.0
+    borrow_prev: Optional[int] = None     # who to hand it back to on revert
 
 
 @dataclass
@@ -56,11 +180,18 @@ class RoomState:
     mode: str = MODE_NORMAL
     shuffle_s: float = 120.0   # rotation interval for the shuffle modes (seconds)
     last_shuffle: float = 0.0  # last chaos reshuffle time
+    rules: Dict = field(default_factory=lambda: dict(DEFAULT_RULES))  # effective ruleset
     items: Dict[str, ItemState] = field(default_factory=dict)
     names: Dict[int, str] = field(default_factory=dict)    # user_id -> display name
     avatars: Dict[int, str] = field(default_factory=dict)  # user_id -> Discord avatar url
     # connectivity per player: user_id -> {"agent": bool, "emu": bool}
     status: Dict[int, dict] = field(default_factory=dict)
+    # transient game state (not persisted — all seconds-scale):
+    thief_cd: Dict[int, float] = field(default_factory=dict)      # uid -> can-steal-again time
+    victim_shield: Dict[int, float] = field(default_factory=dict) # uid -> shielded-until time
+    steal_log: Dict[int, list] = field(default_factory=dict)      # uid -> recent steal timestamps
+    last_lost: Dict = field(default_factory=dict)                 # (uid, key) -> when they lost it
+    offline_since: Dict[int, float] = field(default_factory=dict) # uid -> when their agent dropped
 
 
 @dataclass
@@ -92,8 +223,9 @@ def resolve_pickup(room: RoomState, user_id: int, key: str, level: int) -> Effec
     # Physical pickup always takes the token; the finder holds it at THEIR tier.
     it.owner = user_id
     it.level = personal
-    it.cooldown_until = now + room.cooldown_s
-    it.held_since = now           # (re)start the hot-potato timer for this item
+    it.cooldown_until = now + room.rules.get("steal_cooldown_s", room.cooldown_s)
+    it.held_since = now           # (re)start hold timers for this item
+    it.borrowed = False           # a real find makes it legitimately yours
 
     eff = Effects(changed=True)
     eff.grants.append((user_id, key, personal))
@@ -108,36 +240,84 @@ def resolve_pickup(room: RoomState, user_id: int, key: str, level: int) -> Effec
     return eff
 
 
+def _has_found(room: RoomState, it: ItemState, user_id: int) -> bool:
+    """Has this player 'found' the item for claim purposes (honours shared discovery)."""
+    if user_id in it.discovered:
+        return True
+    return bool(room.rules.get("shared_discovery") and it.discovered)
+
+
 def resolve_claim(room: RoomState, user_id: int, key: str) -> Effects:
     item = BY_KEY.get(key)
     if item is None:
         return Effects(reject=f"unknown item {key}")
-    if room.mode != MODE_NORMAL:
-        return Effects(reject=f"{MODE_LABELS.get(room.mode, 'This')} mode moves items "
-                              f"automatically — no claiming.")
-    it = room.items.get(key)
+    R = room.rules
+    if not R.get("claiming"):
+        return Effects(reject="This mode moves items automatically — no claiming.")
+    it = room.items.setdefault(key, ItemState())
     name = room.names.get(user_id, f"player {user_id}")
-    if it is None or user_id not in it.discovered:
-        return Effects(reject=f"You haven't found {item.name} yet — go find one first.")
     now = time.time()
-    if now < it.cooldown_until:
-        wait = it.cooldown_until - now
-        return Effects(reject=f"{item.name} is on cooldown ({wait:.0f}s).")
+    found = _has_found(room, it, user_id)
+
+    # ── gates (first failure wins) ────────────────────────────────────────
+    if R.get("require_found_to_claim"):
+        if not found:
+            return Effects(reject=f"You haven't found {item.name} yet — go find one first.")
+    elif R.get("open_season_scope") == "owned" and it.owner is None and not found:
+        return Effects(reject=f"Nobody holds {item.name} yet — someone has to find one first.")
     if it.owner == user_id:
         return Effects(reject=f"You already hold {item.name}.")
+    tl = R.get("tenure_lock_s", 0)
+    if it.owner is not None and tl and (now - it.held_since) >= tl:
+        return Effects(reject=f"{room.names.get(it.owner, 'Someone')} has secured "
+                              f"{item.name} — it can't be stolen.")
+    sbl = R.get("steal_back_lock_s", 0)
+    if sbl and (now - room.last_lost.get((user_id, key), -1e9)) < sbl:
+        wait = sbl - (now - room.last_lost[(user_id, key)])
+        return Effects(reject=f"You just lost {item.name} — wait {wait:.0f}s to grab it back.")
+    bud = R.get("steal_budget_per_min", 0)
+    if bud:
+        recent = [t for t in room.steal_log.get(user_id, []) if now - t < 60]
+        room.steal_log[user_id] = recent
+        if len(recent) >= bud:
+            return Effects(reject=f"Steal limit reached ({bud}/min) — cool it for a sec.")
+    scope, cd = R.get("cooldown_scope", "item"), R.get("steal_cooldown_s", 0)
+    if scope == "item" and now < it.cooldown_until:
+        return Effects(reject=f"{item.name} is on cooldown ({it.cooldown_until - now:.0f}s).")
+    if scope == "thief" and now < room.thief_cd.get(user_id, 0):
+        return Effects(reject=f"You're on cooldown ({room.thief_cd[user_id] - now:.0f}s).")
+    if scope == "victim" and it.owner is not None and now < room.victim_shield.get(it.owner, 0):
+        return Effects(reject=f"{room.names.get(it.owner, 'They')} are shielded right now.")
 
+    # ── grant ─────────────────────────────────────────────────────────────
     prev = it.owner
     it.owner = user_id
-    # Claiming gives YOU back your own tier, not whatever the last holder had.
-    it.level = it.discovered.get(user_id, item.present)
-    it.cooldown_until = now + room.cooldown_s
+    it.level = it.discovered.get(user_id, item.present)   # your own tier
     it.held_since = now
+    if not found and R.get("borrow_s"):                   # temporary "raid" borrow
+        it.borrowed, it.borrow_until, it.borrow_prev = True, now + R["borrow_s"], prev
+    else:
+        it.borrowed, it.borrow_until, it.borrow_prev = False, 0.0, None
+        if not found:                                     # permanent unfound steal → keep it sanely
+            it.discovered.setdefault(user_id, item.present)
+    # arm the cooldown for the chosen scope + the budget / steal-back trackers
+    if scope == "item":
+        it.cooldown_until = now + cd
+    elif scope == "thief":
+        room.thief_cd[user_id] = now + cd
+    elif scope == "victim" and prev is not None:
+        room.victim_shield[prev] = now + cd
+    if bud:
+        room.steal_log.setdefault(user_id, []).append(now)
+    if prev is not None:
+        room.last_lost[(prev, key)] = now
 
     eff = Effects(changed=True)
     eff.grants.append((user_id, key, it.level))
     if prev is not None:
         eff.revokes.append((prev, key))
-        eff.event = f"{name} reclaimed {item.name} from {room.names.get(prev, 'someone')}"
+        verb = "borrowed" if it.borrowed else ("stole" if not found else "reclaimed")
+        eff.event = f"{name} {verb} {item.name} from {room.names.get(prev, 'someone')}"
     else:
         eff.event = f"{name} claimed {item.name}"
     return eff
@@ -165,6 +345,17 @@ class RoomHub:
                          mode=(row["mode"] if "mode" in keys and row["mode"] else MODE_NORMAL),
                          shuffle_s=float(row["shuffle_s"]) if "shuffle_s" in keys and row["shuffle_s"] else 120.0,
                          last_shuffle=time.time())
+        # effective ruleset: stored custom JSON, else derived from the preset mode
+        raw_rules = row["rules"] if "rules" in keys and row["rules"] else None
+        if raw_rules:
+            try:
+                room.rules = clamp_rules(json.loads(raw_rules))
+            except Exception:
+                room.rules = preset_rules(room.mode, room.shuffle_s)
+        else:
+            room.rules = preset_rules(room.mode, room.shuffle_s)
+        if room.mode != MODE_CUSTOM:        # legacy cooldown column drives presets
+            room.rules["steal_cooldown_s"] = room.cooldown_s
         for p in db.room_players(code):
             room.names[p["id"]] = p["display_name"]
             room.avatars[p["id"]] = p["avatar"]
@@ -204,6 +395,7 @@ class RoomHub:
         room = self.rooms.get(code)
         if room is not None:
             room.status.setdefault(user_id, {"agent": False, "emu": False})["agent"] = True
+            room.offline_since.pop(user_id, None)        # back online → reset idle timer
 
     def unregister_agent(self, code, user_id, ws):
         if self.agents.get(code, {}).get(user_id) is ws:
@@ -211,6 +403,7 @@ class RoomHub:
         room = self.rooms.get(code)
         if room is not None:
             room.status[user_id] = {"agent": False, "emu": False}
+            room.offline_since[user_id] = time.time()    # start the idle-release clock
 
     def set_emu_status(self, code, user_id, emu):
         room = self.rooms.get(code)
@@ -265,6 +458,7 @@ class RoomHub:
     # -- state serialization for UIs ----------------------------------------
     def serialize(self, code: str) -> dict:
         room = self.rooms[code]
+        R = room.rules
         now = time.time()
         ledger = {}
         for key, it in room.items.items():
@@ -288,21 +482,31 @@ class RoomHub:
                 "tier": tier_label(item, level) if owned else "—",
                 "image": item_image(key, level),
                 "discovered": sorted(it.discovered),
-                "cooldown_remaining": max(0.0, it.cooldown_until - now),
+                # per-item cooldown only gates when the scope IS the item
+                "cooldown_remaining": (max(0.0, it.cooldown_until - now)
+                                       if R.get("cooldown_scope") == "item" else 0.0),
             }
-            if room.mode == MODE_HOT_POTATO and owned:
-                entry["hold_remaining"] = max(0.0, it.held_since + room.shuffle_s - now)
+            if owned and R.get("hold_limit_s"):
+                entry["hold_remaining"] = max(0.0, it.held_since + R["hold_limit_s"] - now)
+            if owned and R.get("tenure_lock_s"):
+                entry["locked"] = (now - it.held_since) >= R["tenure_lock_s"]
+                entry["tenure_remaining"] = max(0.0, it.held_since + R["tenure_lock_s"] - now)
+            if it.borrowed:
+                entry["borrow_remaining"] = max(0.0, it.borrow_until - now)
             ledger[key] = entry
         return {
             "type": P.STATE,
             "room": room.pub_id,      # public handle only — never leak the join code
             "name": room.name,
-            "cooldown_s": room.cooldown_s,
+            "cooldown_s": R.get("steal_cooldown_s", room.cooldown_s),
             "host": room.host,
             "mode": room.mode,
+            "rules": R,
+            "claiming": bool(R.get("claiming")),
+            "rules_summary": summarize_rules(R),
             "shuffle_s": room.shuffle_s,
-            "shuffle_remaining": (max(0.0, room.last_shuffle + room.shuffle_s - now)
-                                  if room.mode == MODE_CHAOS else 0.0),
+            "shuffle_remaining": (max(0.0, room.last_shuffle + R["auto_shuffle_s"] - now)
+                                  if R.get("auto_shuffle_s") else 0.0),
             "players": [
                 {"id": uid, "name": nm, "avatar": room.avatars.get(uid),
                  "agent": room.status.get(uid, {}).get("agent", False),
@@ -333,7 +537,9 @@ class RoomHub:
     async def admin_set_cooldown(self, code: str, seconds: float):
         room = self.rooms[code]
         room.cooldown_s = max(0.0, float(seconds))
+        room.rules["steal_cooldown_s"] = room.cooldown_s
         db.update_cooldown(code, room.cooldown_s)
+        db.update_rules(code, json.dumps(room.rules))
         await self.broadcast_event(code, f"Host set steal cooldown to {room.cooldown_s:.0f}s")
         await self.broadcast_state(code)
 
@@ -434,23 +640,46 @@ class RoomHub:
         room = self.rooms.get(code)
         if room is None:
             return
-        room.mode = mode if mode in MODES else MODE_NORMAL
+        room.mode = mode if mode in (MODE_NORMAL, MODE_HOT_POTATO, MODE_CHAOS) else MODE_NORMAL
         if seconds:
             try:
                 room.shuffle_s = max(5.0, float(seconds))
             except (TypeError, ValueError):
                 pass
+        # a preset is just a ruleset; rebuild it (keeping the host's steal cooldown)
+        room.rules = preset_rules(room.mode, room.shuffle_s)
+        room.rules["steal_cooldown_s"] = room.cooldown_s
         now = time.time()
         room.last_shuffle = now
         for it in room.items.values():        # everyone keeps their item a full round first
             it.held_since = now
         db.update_mode(code, room.mode, room.shuffle_s)
+        db.update_rules(code, json.dumps(room.rules))
         if room.mode == MODE_NORMAL:
             await self.broadcast_event(code, "Host set mode to Normal — claiming is back on.")
         else:
             await self.broadcast_event(
                 code, f"Host started {MODE_LABELS[room.mode]} — items shuffle every "
                       f"{int(room.shuffle_s)}s. Claiming is off.")
+        await self.broadcast_state(code)
+
+    async def admin_set_rules(self, code: str, raw: dict):
+        """Host-composed Custom ruleset. Validates + clamps, then the engine runs
+        entirely off room.rules (presets are just named points in the same space)."""
+        room = self.rooms.get(code)
+        if room is None:
+            return
+        room.rules = clamp_rules(raw)
+        room.mode = MODE_CUSTOM
+        room.cooldown_s = room.rules["steal_cooldown_s"]   # mirror for legacy displays
+        now = time.time()
+        room.last_shuffle = now
+        for it in room.items.values():
+            it.held_since = now
+        db.update_mode(code, room.mode, room.shuffle_s)
+        db.update_cooldown(code, room.cooldown_s)
+        db.update_rules(code, json.dumps(room.rules))
+        await self.broadcast_event(code, "Host set a Custom ruleset — " + summarize_rules(room.rules))
         await self.broadcast_state(code)
 
     def _available_finders(self, room: RoomState, it: ItemState) -> List[int]:
@@ -470,69 +699,136 @@ class RoomHub:
             revokes.append((prev, key))
         self._persist(room, key)
 
+    def _release(self, room: RoomState, key: str, now: float, grants, revokes):
+        """Drop an item to unowned (claimable by anyone who can)."""
+        it = room.items[key]
+        prev = it.owner
+        if prev is None:
+            return
+        it.owner = None
+        it.held_since = now
+        revokes.append((prev, key))
+        self._persist(room, key)
+
     async def tick_shuffles(self):
-        """Driven once a second by the server; rotates items in any room whose
-        mode is active and whose timer is due."""
+        """Driven once a second by the server: applies every time-based rule
+        (hold limits, tenure, idle release, borrow reverts, auto-shuffle)."""
         now = time.time()
         for code in list(self.rooms.keys()):
             room = self.rooms.get(code)
-            if room is None or room.mode == MODE_NORMAL:
+            if room is None:
                 continue
             try:
-                if room.mode == MODE_HOT_POTATO:
-                    await self._tick_hot_potato(code, room, now)
-                elif room.mode == MODE_CHAOS:
-                    await self._tick_chaos(code, room, now)
+                await self._tick_room(code, room, now)
             except Exception:
                 pass
 
-    async def _tick_hot_potato(self, code, room, now):
+    async def _tick_room(self, code, room, now):
+        R = room.rules
+        if not (R.get("hold_limit_s") or R.get("idle_release_s") or R.get("auto_shuffle_s")
+                or any(it.borrowed for it in room.items.values())):
+            return                                    # no time-based rules → nothing to do
         grants, revokes, events = [], [], []
+
+        # 1. borrow leases expire → revert to previous owner, else the pool
         for key, it in room.items.items():
-            if not it.discovered:
-                continue
-            avail = self._available_finders(room, it)
-            if not avail:
-                continue
-            if it.owner is None:                      # pull a found-but-unheld item in
-                new = avail[0]
-            else:
-                if now - it.held_since < room.shuffle_s:
-                    continue                          # still their turn
-                if it.owner in avail:
-                    if len(avail) == 1:               # only the holder is online → keep
+            if it.borrowed and now >= it.borrow_until:
+                it.borrowed, it.borrow_until = False, 0.0
+                target = it.borrow_prev if R.get("borrow_revert") == "prev_owner" else None
+                it.borrow_prev = None
+                if target is not None and target in room.names:
+                    self._reassign(room, key, target, now, grants, revokes)
+                    events.append(f"↩ {BY_KEY[key].name} returned to {room.names.get(target)}")
+                else:
+                    self._release(room, key, now, grants, revokes)
+                    events.append(f"↩ {BY_KEY[key].name} borrow ended")
+
+        # 2. idle release → an offline owner drops their items back to the pool
+        idle = R.get("idle_release_s", 0)
+        if idle:
+            for key, it in room.items.items():
+                if it.owner is None:
+                    continue
+                off = room.offline_since.get(it.owner)
+                if off and (now - off) >= idle:
+                    nm = room.names.get(it.owner, "Someone")
+                    self._release(room, key, now, grants, revokes)
+                    events.append(f"💤 {nm} dropped {BY_KEY[key].name} (offline)")
+
+        # 3. hold limit → pass to next finder / release / return to first finder
+        hl = R.get("hold_limit_s", 0)
+        if hl:
+            tl = R.get("tenure_lock_s", 0)
+            expiry = R.get("hold_expiry", "next_finder")
+            for key, it in room.items.items():
+                if not it.discovered:
+                    continue
+                if tl and it.owner is not None and (now - it.held_since) >= tl:
+                    continue                          # secured items don't auto-move
+                if expiry == "next_finder":
+                    avail = self._available_finders(room, it)
+                    if not avail:
+                        continue
+                    if it.owner is None:              # pull a found-but-unheld item in
+                        new = avail[0]
+                    else:
+                        if now - it.held_since < hl:
+                            continue                  # still their turn
+                        if it.owner in avail:
+                            if len(avail) == 1:       # only the holder is online → keep
+                                it.held_since = now
+                                continue
+                            new = avail[(avail.index(it.owner) + 1) % len(avail)]
+                        else:
+                            new = avail[0]            # holder offline → hand it on
+                    if new == it.owner:
                         it.held_since = now
                         continue
-                    new = avail[(avail.index(it.owner) + 1) % len(avail)]
+                    self._reassign(room, key, new, now, grants, revokes)
+                    events.append(f"🔥 {BY_KEY[key].name} → {room.names.get(new, 'someone')}")
                 else:
-                    new = avail[0]                    # holder went offline → hand it on
-            if new == it.owner:
-                it.held_since = now
-                continue
-            self._reassign(room, key, new, now, grants, revokes)
-            events.append(f"🔥 {BY_KEY[key].name} → {room.names.get(new, 'someone')}")
+                    if it.owner is None or (now - it.held_since) < hl:
+                        continue
+                    if expiry == "release":
+                        self._release(room, key, now, grants, revokes)
+                        events.append(f"⌛ {BY_KEY[key].name} released — anyone can claim it")
+                    else:                             # return_finder
+                        finders = sorted(it.discovered)
+                        target = finders[0] if finders else None
+                        if target is not None and target != it.owner:
+                            self._reassign(room, key, target, now, grants, revokes)
+                            events.append(f"↩ {BY_KEY[key].name} → {room.names.get(target, 'someone')}")
+                        else:
+                            it.held_since = now
+
+        # 4. auto-shuffle → periodic random reassignment (stacks on claiming)
+        asf = R.get("auto_shuffle_s", 0)
+        if asf and (now - room.last_shuffle) >= asf:
+            room.last_shuffle = now
+            scope = R.get("shuffle_scope", "all")
+            moved = 0
+            for key, it in room.items.items():
+                if not it.discovered:
+                    continue
+                if scope == "unowned" and it.owner is not None:
+                    continue
+                if scope == "idle" and it.owner is not None and (now - it.held_since) < asf:
+                    continue
+                avail = self._available_finders(room, it)
+                if not avail:
+                    continue
+                new = random.choice(avail)
+                if new == it.owner:
+                    continue
+                self._reassign(room, key, new, now, grants, revokes)
+                moved += 1
+            if moved:
+                events.append("🌀 Chaos shuffle! Items moved.")
+
         if grants or revokes:
             await self._send_commands(code, grants, revokes)
             for ev in events:
                 await self.broadcast_event(code, ev)
-            await self.broadcast_state(code)
-
-    async def _tick_chaos(self, code, room, now):
-        if now - room.last_shuffle < room.shuffle_s:
-            return
-        room.last_shuffle = now
-        grants, revokes = [], []
-        for key, it in room.items.items():
-            avail = self._available_finders(room, it)
-            if not avail:
-                continue
-            new = random.choice(avail)
-            if new == it.owner:
-                continue
-            self._reassign(room, key, new, now, grants, revokes)
-        if grants or revokes:
-            await self._send_commands(code, grants, revokes)
-            await self.broadcast_event(code, "🌀 Chaos shuffle! Everything moved.")
             await self.broadcast_state(code)
 
     async def _send_commands(self, code, grants, revokes):
