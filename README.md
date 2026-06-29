@@ -203,6 +203,29 @@ reported automatically; grants/revokes are written into your game live.
 }
 ```
 
+## Deploying updates (production)
+
+The public server (`https://hyrulelink.billogna.lol`) runs on a droplet at
+`/opt/hyrulelink`, which is a **git checkout of `master`** served by the
+`hyrulelink.service` systemd unit (behind nginx). To ship a change:
+
+1. Commit + push to `origin/master`.
+2. On the droplet, run the deploy helper:
+
+   ```bash
+   /root/deploy-hyrulelink.sh        # git pull --ff-only + restart ONLY if server code changed
+   ```
+
+The web UI is served from `web/` per-request, so **web/static changes go live on
+pull with no restart**; only `server/`, `shared/`, `run_server.py`, or
+`requirements.txt` changes trigger `systemctl restart hyrulelink` (which the
+helper does automatically). Server-local state is git-ignored and untouched by
+pulls: `.env` (secrets) and `server/hyrulelink.db`.
+
+> SSH note: connect as `ssh root@<droplet-ip>` with the default key. UFW
+> rate-limits SSH (drops an IP after ~6 new connections in 30s, seen as
+> connection *timeouts*) — avoid firing many rapid connections.
+
 ## Notes & limits (v1)
 
 - Only one client may attach to a QUsb2Snes device at a time — close
