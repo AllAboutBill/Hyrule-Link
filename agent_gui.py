@@ -60,6 +60,93 @@ OPEN_SEED_SETTINGS = {
     "entrances": "none",
 }
 
+
+def _merge(base, overrides):
+    """Deep-merge `overrides` onto a copy of `base` (nested dicts merged, not replaced)."""
+    out = copy.deepcopy(base)
+    for k, v in overrides.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+# ALTTPR generation presets (mirrors alttpr.com's preset dropdown / AlttprHelper).
+# Each is an override on OPEN_SEED_SETTINGS; "Open" is the bare assured-sword template.
+SEED_PRESET_OVERRIDES = {
+    "Open": {},
+    "Standard": {"mode": "standard", "weapons": "randomized"},
+    "Fast Ganon": {"goal": "fast_ganon"},
+    "All Dungeons": {"goal": "dungeons"},
+    "Keysanity": {"dungeon_items": "full"},
+    "Maps/Compasses/Keys": {"dungeon_items": "mcs"},
+    "Hard": {"item": {"functionality": "hard", "pool": "hard"}},
+    "Swordless": {"weapons": "swordless"},
+}
+
+
+def preset_settings(name):
+    return _merge(OPEN_SEED_SETTINGS, SEED_PRESET_OVERRIDES.get(name, {}))
+
+
+# Cosmetic / patch options passed to pyz3r create_patched_game (valid values per
+# pyz3r.rom). MSU mode forces music off + resume on regardless of these.
+DEFAULT_PATCH = {"heartspeed": "half", "heartcolor": "red", "menu_speed": "instant",
+                 "quickswap": True, "music": True, "spritename": "Link",
+                 "msu1_resume": False}
+HEARTSPEEDS = ["off", "quarter", "half", "normal", "double"]
+HEARTCOLORS = ["red", "blue", "green", "yellow"]
+MENU_SPEEDS = ["instant", "fast", "normal", "slow"]
+
+# Ports probed when enumerating open emulators for the picker. 48879 (0xBEEF) is
+# snes9x-emunwa; 65400+ is the NWA draft default range; mirror emu_connector.
+NWA_SCAN_PORTS = [48879] + list(range(65400, 65404))
+
+
+def scan_emulators():
+    """Enumerate every SNES memory source reachable on localhost right now.
+
+    Returns a list of {"label", "bind"} where `bind` is what _connect() needs:
+      {"transport": "emu", "source": "nwa"|"retroarch", "port": <int|None>}  or
+      {"transport": "hardware"}  (a QUsb2Snes/SNI bridge).
+    Lets the player see which emulators are open and pin one — handy when two run
+    on one PC (e.g. two snes9x-nwa instances on different ports for local testing).
+    """
+    found = []
+    for p in NWA_SCAN_PORTS:                 # snes9x-nwa / other EmuNWA emulators
+        try:
+            s = socket.create_connection(("127.0.0.1", p), timeout=0.25)
+            s.sendall(b"EMULATOR_INFO\n")
+            reply = s.recv(256).decode(errors="replace"); s.close()
+            name = next((ln.split(":", 1)[1].strip() for ln in reply.splitlines()
+                         if ln.lower().startswith("name:")), "snes9x-nwa")
+            found.append({"label": f"{name} @{p}",
+                          "bind": {"transport": "emu", "source": "nwa", "port": p}})
+        except OSError:
+            continue
+    try:                                     # RetroArch (UDP network commands)
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(0.4)
+        s.sendto(b"VERSION\n", ("127.0.0.1", 55355))
+        ver = s.recvfrom(128)[0].decode(errors="replace").strip(); s.close()
+        found.append({"label": f"RetroArch {ver}".strip(),
+                      "bind": {"transport": "emu", "source": "retroarch", "port": None}})
+    except OSError:
+        pass
+    for port in (23074, 8080):               # QUsb2Snes/SNI bridge (hardware + others)
+        try:
+            w = websocket.create_connection(f"ws://127.0.0.1:{port}", timeout=0.6)
+            w.send(json.dumps({"Opcode": "DeviceList", "Space": "SNES"}))
+            devices = json.loads(w.recv()).get("Results", []); w.close()
+            found.append({"label": f"SNI bridge — {devices[0]}" if devices
+                          else "SNI bridge (no device yet)",
+                          "bind": {"transport": "hardware"}})
+            break
+        except Exception:
+            continue
+    return found
+
+
 # palette — billogna.lol's "aurora" design language (see README "Web UI style").
 # mint / violet / blue over near-black; no pink. Tk can't render the web's
 # translucent "glass" or backdrop blur, so the rgba() card/border tokens are
@@ -297,6 +384,7 @@ class App(tk.Tk):
         self._board_cols = 0          # current item-grid column count (responsive)
 
         self.cfg = load_settings()
+        self._migrate_settings()
         self.base = self.cfg.get("server", PUBLIC_SERVER)
         self.session = self.cfg.get("session")   # signed Discord session token (optional)
         self.me = None              # {name, avatar, admin} when logged in
@@ -765,7 +853,9 @@ class App(tk.Tk):
 
         server = tk.Frame(play, bg=FIELD, highlightbackground=LINE, highlightthickness=1)
         server.pack(fill="x", padx=14, pady=(0, 14))
-        self._field_label(server, "SERVER", bg=FIELD).pack(fill="x", padx=10, pady=(8, 3))
+        srvhead = tk.Frame(server, bg=FIELD); srvhead.pack(fill="x", padx=10, pady=(8, 3))
+        self._field_label(srvhead, "SERVER", bg=FIELD).pack(side="left")
+        self._button(srvhead, "Use public", self._use_public_server, small=True).pack(side="right")
         self.e_server = self._entry(server, value=self.cfg.get("server", PUBLIC_SERVER))
         self.e_server.pack(fill="x", padx=10, ipady=4)
         tk.Label(server, text="Keep the public server unless a host gave you another address.",
@@ -814,6 +904,13 @@ class App(tk.Tk):
         self.err.pack(fill="x", pady=(10, 0))
         self.toast_lbl = self._label(shell, "", fg=GREEN, font=("Segoe UI", 9))
         self.toast_lbl.pack(fill="x")
+
+    def _use_public_server(self):
+        """One-tap return to the shared public server (no retyping the URL)."""
+        if hasattr(self, "e_server"):
+            self.e_server.delete(0, "end"); self.e_server.insert(0, PUBLIC_SERVER)
+        self.base = PUBLIC_SERVER
+        self.cfg["server"] = PUBLIC_SERVER; save_settings(self.cfg)
 
     def _host(self):
         self.base = self.e_server.get().strip().rstrip("/")
@@ -984,10 +1081,15 @@ class App(tk.Tk):
 
     def _enter_room(self, data):
         self.room = data
-        # remember our identity in this room so a future launch rejoins as US
+        # remember our identity in this room so a future launch rejoins as US.
+        # Merge (don't replace) so a ROM pinned to this room survives the rejoin.
         rooms = self.cfg.setdefault("rooms", {})
-        rooms[data["code"]] = {"player_id": data["player_id"],
-                               "player_token": data["player_token"]}
+        entry = rooms.setdefault(data["code"], {})
+        entry.update(player_id=data["player_id"], player_token=data["player_token"])
+        # if this room already has a ROM, make Launch use it again
+        room_rom = entry.get("rom_path")
+        if room_rom and os.path.exists(room_rom):
+            self.cfg["rom_path"] = room_rom
         self.cfg.update(server=self.base, display=self.e_name.get().strip(), room=data["code"])
         save_settings(self.cfg)
         self._start_ui_socket()
@@ -1080,6 +1182,20 @@ class App(tk.Tk):
         self.emu_line = tk.Label(connect_info, text="", fg=MUTED, bg=PANEL, font=("Segoe UI", 9),
                                  anchor="w")
         self.emu_line.pack(fill="x")
+
+        # which emulator to link to (auto, or pin a specific open one — useful when
+        # two emulators run on one PC, e.g. local two-player testing)
+        bindrow = tk.Frame(connect_info, bg=PANEL); bindrow.pack(fill="x", pady=(7, 0))
+        self._field_label(bindrow, "BIND TO").pack(side="left", padx=(0, 7))
+        self.emu_pin_var = tk.StringVar(value="Auto-detect")
+        self.emu_pin_combo = ttk.Combobox(bindrow, textvariable=self.emu_pin_var, state="readonly",
+                                          style="HL.TCombobox", width=26, values=["Auto-detect"])
+        self.emu_pin_combo.pack(side="left")
+        self.emu_pin_combo.bind("<<ComboboxSelected>>", self._on_pick_emu)
+        self._button(bindrow, "Refresh", self._refresh_emu_picker, small=True).pack(side="left", padx=6)
+        self._emu_endpoints = []
+        self._refresh_emu_picker()
+
         tools = tk.Frame(connect_info, bg=PANEL); tools.pack(fill="x", pady=(7, 0))
         self._button(tools, "Start SNI", self._use_sni, small=True).pack(side="left")
         self._button(tools, "Configure", self._configure_emulator, small=True).pack(side="left", padx=5)
@@ -1778,12 +1894,62 @@ class App(tk.Tk):
                  fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(anchor="w", padx=16, pady=(10, 0))
         self._button(win, "Got it", win.destroy, primary=True).pack(anchor="w", padx=16, pady=12)
 
+    # ── emulator picker (see what's open, pin one) ──────────────────────────
+    def _refresh_emu_picker(self):
+        """Re-scan open emulators on a worker thread; repopulate the Bind-to list."""
+        def work():
+            found = scan_emulators()
+            self.after(0, lambda: self._populate_emu_picker(found))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _populate_emu_picker(self, found):
+        if not hasattr(self, "emu_pin_combo") or not self.emu_pin_combo.winfo_exists():
+            return
+        self._emu_endpoints = found
+        labels = ["Auto-detect"] + [f["label"] for f in found]
+        pin = self.cfg.get("emu_pin", "auto")
+        sel = "Auto-detect"
+        if isinstance(pin, dict):
+            sel = next((f["label"] for f in found if f["bind"] == {k: v for k, v in pin.items()
+                                                                   if k != "label"}), None)
+            if sel is None:                       # pinned source isn't open right now
+                sel = pin.get("label", "Auto-detect")
+                if sel not in labels:
+                    labels.append(sel + "  (offline)")
+                    sel = sel + "  (offline)"
+        self.emu_pin_combo.config(values=labels)
+        self.emu_pin_var.set(sel)
+
+    def _on_pick_emu(self, _e=None):
+        label = self.emu_pin_var.get()
+        if label == "Auto-detect":
+            self.cfg["emu_pin"] = "auto"
+        else:
+            for f in getattr(self, "_emu_endpoints", []):
+                if f["label"] == label:
+                    self.cfg["emu_pin"] = {**f["bind"], "label": label}
+                    break
+        save_settings(self.cfg)
+        self._log(f"Emulator bind: {label}")
+
     # ── emulator agent link ─────────────────────────────────────────────────
     def _toggle_connect(self):
         self._disconnect() if self.agent else self._connect()
 
-    def _connect(self):
-        from agent.agent import HyruleAgent
+    def _resolve_transport(self):
+        """Build (transport, label) from the pinned choice, or auto-detect.
+
+        Returns (None, None) if the user declined to start a source when nothing
+        was detected (auto mode only)."""
+        from agent.sni.emu_connector import EmuConnector
+        from agent.sni.qusb2snes_tracker import QUsb2SnesTracker
+        pin = self.cfg.get("emu_pin", "auto")
+        if isinstance(pin, dict):
+            if pin.get("transport") == "hardware":
+                return QUsb2SnesTracker(), pin.get("label", "SNI bridge")
+            return (EmuConnector(source=pin.get("source"), port=pin.get("port")),
+                    pin.get("label") or pin.get("source") or "emulator")
+        # auto
         transport, source, label = detect_emulator()
         if label == "not detected":
             if messagebox.askyesno("HyruleLink",
@@ -1791,13 +1957,19 @@ class App(tk.Tk):
                 "BizHawk, or real hardware.\n\n(snes9x-nwa and RetroArch connect directly — if "
                 "you're using one of those, click No and just make sure it's running.)"):
                 self._use_sni()
-                transport, label = "hardware", "SNI bridge"
+                transport = "hardware"; label = "SNI bridge"
+            else:
+                return None, None
         if transport == "hardware":
-            from agent.sni.qusb2snes_tracker import QUsb2SnesTracker
-            self.transport = QUsb2SnesTracker()
-        else:
-            from agent.sni.emu_connector import EmuConnector
-            self.transport = EmuConnector(source=source)
+            return QUsb2SnesTracker(), label
+        return EmuConnector(source=source), label
+
+    def _connect(self):
+        from agent.agent import HyruleAgent
+        transport, label = self._resolve_transport()
+        if transport is None:
+            return
+        self.transport = transport
         h = QueueLogHandler(self.log_q); h.setFormatter(logging.Formatter("%(message)s"))
         logging.getLogger().addHandler(h); logging.getLogger().setLevel(logging.INFO)
         self.agent = HyruleAgent(self.transport, self._ws_url(), self.room["code"],
@@ -1805,6 +1977,21 @@ class App(tk.Tk):
         self.agent.start()
         self.btn_connect.config(text="Disconnect", bg=PANEL2, fg=INK)
         self._log(f"Linking emulator via {label}…")
+        threading.Thread(target=self._greet_emu, daemon=True).start()
+
+    def _greet_emu(self):
+        """Once the emulator link is live, flash a one-time OSD so the player sees
+        notifications work (RetroArch only; a no-op on transports without an OSD)."""
+        for _ in range(40):
+            if self.transport is None or self._stop_all.is_set():
+                return
+            if getattr(self.transport, "connected", False):
+                try:
+                    self.transport.show_message("HyruleLink linked — items now sync")
+                except Exception:
+                    pass
+                return
+            time.sleep(0.5)
 
     def _disconnect(self):
         try:
@@ -1838,11 +2025,45 @@ class App(tk.Tk):
         box.see("end"); box.configure(state="disabled")
 
     # ── in-app emulator launch ──────────────────────────────────────────────
-    def _emu_type(self, path):
-        choice = self.cfg.get("emu_type", "auto")
-        if choice in ("snes9x", "retroarch"):
-            return choice
-        return "retroarch" if "retroarch" in os.path.basename(path or "").lower() else "snes9x"
+    def _migrate_settings(self):
+        """Bring older gui_settings.json up to the current schema (in place)."""
+        c = self.cfg
+        if "emu_paths" not in c:                    # split the old single emu_path
+            paths = {}
+            old = c.get("emu_path")
+            if old:
+                kind = ("retroarch" if (c.get("emu_type") == "retroarch"
+                        or "retroarch" in os.path.basename(old).lower()) else "snes9x")
+                paths[kind] = old
+                c.setdefault("launch_emu", kind)
+            c["emu_paths"] = paths
+        c.setdefault("patch", dict(DEFAULT_PATCH))
+        c.setdefault("msu", {"enable": False, "pack_dir": ""})
+        c.setdefault("seed_preset", "Open")
+        c.setdefault("emu_pin", "auto")
+
+    def _emu_path(self, kind):
+        return (self.cfg.get("emu_paths") or {}).get(kind, "")
+
+    def _launch_kind(self):
+        """Which emulator the Launch button starts (explicit choice, else inferred)."""
+        k = self.cfg.get("launch_emu")
+        if k in ("snes9x", "retroarch"):
+            return k
+        paths = self.cfg.get("emu_paths") or {}
+        if paths.get("retroarch"):
+            return "retroarch"
+        if paths.get("snes9x"):
+            return "snes9x"
+        return "retroarch"
+
+    def _remember_room_rom(self, rom):
+        """Pin a ROM to the current room so a later Join/Rejoin relaunches the same one."""
+        if not rom or self.room is None:
+            return
+        entry = self.cfg.setdefault("rooms", {}).setdefault(self.room.get("code"), {})
+        entry["rom_path"] = rom
+        save_settings(self.cfg)
 
     def _guess_core(self, emu_path):
         if not emu_path:
@@ -1851,61 +2072,209 @@ class App(tk.Tk):
         return cand if os.path.exists(cand) else ""
 
     def _ensure_ra_netcfg(self):
+        # Appended over RetroArch's own config at launch (--appendconfig). Besides
+        # opening the command port, force on-screen notifications ON: SHOW_MSG
+        # (our "stolen from…" / "Items shuffled" OSD) is queued via
+        # runloop_msg_queue_push and only renders when video_font_enable is set,
+        # so a player who turned notifications off would never see them.
+        want = ('network_cmd_enable = "true"\n'
+                'network_cmd_port = "55355"\n'
+                'video_font_enable = "true"\n'
+                'menu_enable_widgets = "true"\n')   # card-style notification popups, not plain text
         path = os.path.join(HERE, "retroarch_net.cfg")
         try:
-            if not os.path.exists(path):
+            current = ""
+            if os.path.exists(path):
+                with open(path) as f:
+                    current = f.read()
+            if "menu_enable_widgets" not in current:   # create, or upgrade an older file
                 with open(path, "w") as f:
-                    f.write('network_cmd_enable = "true"\nnetwork_cmd_port = "55355"\n')
+                    f.write(want)
         except Exception:
             pass
         return path
 
     def _emu_summary(self):
-        emu = self.cfg.get("emu_path")
-        return f"{self._emu_type(emu)} — {os.path.basename(emu)}" if emu else "not set up"
+        kind = self._launch_kind()
+        emu = self._emu_path(kind)
+        rom = self.cfg.get("rom_path")
+        head = f"{kind} — {os.path.basename(emu)}" if emu else "emulator not set up"
+        return f"{head}  ·  {os.path.basename(rom)}" if rom else head
+
+    def _refresh_emu_summary(self):
+        if hasattr(self, "emu_summary_lbl") and self.emu_summary_lbl.winfo_exists():
+            self.emu_summary_lbl.config(text=self._emu_summary())
+
+    # ── path-row helper shared by the setup dialogs ─────────────────────────
+    def _path_row(self, parent, label, value, kinds=None, directory=False):
+        tk.Label(parent, text=label, fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(
+            anchor="w", pady=(8, 0), padx=16)
+        row = tk.Frame(parent, bg=BG); row.pack(fill="x", padx=16)
+        e = self._entry(row, value=value or ""); e.pack(side="left", fill="x", expand=True, ipady=3)
+
+        def browse():
+            p = (filedialog.askdirectory(title=label) if directory
+                 else filedialog.askopenfilename(title=label, filetypes=kinds or [("All", "*.*")]))
+            if p:
+                e.delete(0, "end"); e.insert(0, p)
+        tk.Button(row, text="Browse…", command=browse, relief="flat", bg=PANEL, fg=INK,
+                  bd=0, padx=10).pack(side="left", padx=(6, 0))
+        return e
 
     # ── in-app seed generation (pyz3r → alttpr.com) ─────────────────────────
     def generate_seed(self):
-        base = self.cfg.get("base_rom")
-        if not base or not os.path.exists(base):
-            p = filedialog.askopenfilename(
-                title="Select your A Link to the Past JP 1.0 base ROM (.sfc)",
-                filetypes=[("SNES ROM", "*.sfc *.smc"), ("All", "*.*")])
-            if not p:
-                return
-            self.cfg["base_rom"] = p; save_settings(self.cfg); base = p
-        self._log("Generating an Open seed (needs internet, ~10s)…")
-        threading.Thread(target=self._generate_seed_thread, args=(base,), daemon=True).start()
+        self._seed_dialog()
 
-    def _generate_seed_thread(self, base):
+    def _seed_dialog(self):
+        win = tk.Toplevel(self); win.title("Generate a seed"); win.configure(bg=BG)
+        win.geometry("600x430"); win.transient(self); pad = {"padx": 16}
+        tk.Label(win, text="Generate an ALTTPR seed", fg=GOLD, bg=BG,
+                 font=("Segoe UI Semibold", 13)).pack(anchor="w", pady=(14, 4), **pad)
+        tk.Label(win, text="Patched on alttpr.com (needs internet, ~10s) and set as your ROM.",
+                 fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(anchor="w", **pad)
+
+        tk.Label(win, text="Preset", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(
+            anchor="w", pady=(10, 0), **pad)
+        preset_var = tk.StringVar(value=self.cfg.get("seed_preset", "Open"))
+        ttk.Combobox(win, textvariable=preset_var, state="readonly", style="HL.TCombobox",
+                     values=list(SEED_PRESET_OVERRIDES)).pack(anchor="w", **pad)
+
+        e_base = self._path_row(win, "ALTTP JP 1.0 base ROM (.sfc/.smc)", self.cfg.get("base_rom", ""),
+                                [("SNES ROM", "*.sfc *.smc"), ("All", "*.*")])
+
+        msu = self.cfg.get("msu", {})
+        msu_var = tk.BooleanVar(value=msu.get("enable", False))
+        tk.Checkbutton(win, text="Use an MSU-1 music pack (turns off in-ROM music)",
+                       variable=msu_var, fg=INK, bg=BG, selectcolor=PANEL2, activebackground=BG,
+                       activeforeground=INK, font=("Segoe UI", 9), anchor="w").pack(
+                           anchor="w", padx=12, pady=(10, 0))
+        e_msu = self._path_row(win, "MSU pack folder (its *.pcm tracks are copied next to the seed)",
+                               msu.get("pack_dir", ""), directory=True)
+
+        err = tk.Label(win, text="", fg=RED, bg=BG, font=("Segoe UI", 9)); err.pack(anchor="w", pady=(6, 0), **pad)
+        bar = tk.Frame(win, bg=BG); bar.pack(anchor="w", pady=12, **pad)
+
+        def gen():
+            base = e_base.get().strip()
+            if not base or not os.path.exists(base):
+                err.config(text="pick your ALTTP JP 1.0 base ROM first"); return
+            self.cfg["seed_preset"] = preset_var.get()
+            self.cfg["base_rom"] = base
+            self.cfg["msu"] = {"enable": msu_var.get(), "pack_dir": e_msu.get().strip()}
+            save_settings(self.cfg)
+            win.destroy()
+            self._log(f"Generating a {preset_var.get()} seed (needs internet, ~10s)…")
+            threading.Thread(target=self._generate_seed_thread,
+                             args=(base, preset_var.get()), daemon=True).start()
+        self._button(bar, "Generate", gen, primary=True).pack(side="left")
+        self._button(bar, "Patch / cosmetics…", self._patch_dialog).pack(side="left", padx=8)
+        self._button(bar, "Cancel", win.destroy).pack(side="left")
+
+    def _patch_dialog(self):
+        win = tk.Toplevel(self); win.title("Patch / cosmetics"); win.configure(bg=BG)
+        win.geometry("440x420"); win.transient(self); pad = {"padx": 16}
+        tk.Label(win, text="Cosmetic / patch settings", fg=GOLD, bg=BG,
+                 font=("Segoe UI Semibold", 13)).pack(anchor="w", pady=(14, 8), **pad)
+        p = {**DEFAULT_PATCH, **self.cfg.get("patch", {})}
+
+        def combo(label, var, values):
+            tk.Label(win, text=label, fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(anchor="w", pady=(6, 0), **pad)
+            ttk.Combobox(win, textvariable=var, state="readonly", style="HL.TCombobox",
+                         values=values).pack(anchor="w", **pad)
+
+        hs = tk.StringVar(value=p["heartspeed"]); combo("Low-health beep", hs, HEARTSPEEDS)
+        hc = tk.StringVar(value=p["heartcolor"]); combo("Heart color", hc, HEARTCOLORS)
+        ms = tk.StringVar(value=p["menu_speed"]); combo("Menu speed", ms, MENU_SPEEDS)
+
+        tk.Label(win, text="Sprite name (e.g. Link)", fg=MUTED, bg=BG,
+                 font=("Segoe UI", 9)).pack(anchor="w", pady=(6, 0), **pad)
+        e_sprite = self._entry(win, value=p.get("spritename", "Link"))
+        e_sprite.pack(fill="x", ipady=3, **pad)
+
+        qs = tk.BooleanVar(value=p["quickswap"])
+        mu = tk.BooleanVar(value=p["music"])
+        mr = tk.BooleanVar(value=p["msu1_resume"])
+        for text, var in (("Quickswap items (L/R)", qs), ("In-ROM music", mu),
+                          ("MSU-1 resume after reset", mr)):
+            tk.Checkbutton(win, text=text, variable=var, fg=INK, bg=BG, selectcolor=PANEL2,
+                           activebackground=BG, activeforeground=INK, font=("Segoe UI", 9),
+                           anchor="w").pack(anchor="w", padx=12, pady=(6, 0))
+
+        def save():
+            self.cfg["patch"] = {"heartspeed": hs.get(), "heartcolor": hc.get(),
+                                 "menu_speed": ms.get(), "quickswap": qs.get(), "music": mu.get(),
+                                 "msu1_resume": mr.get(), "spritename": e_sprite.get().strip() or "Link"}
+            save_settings(self.cfg)
+            win.destroy()
+        bar = tk.Frame(win, bg=BG); bar.pack(anchor="w", pady=12, **pad)
+        self._button(bar, "Save", save, primary=True).pack(side="left")
+        self._button(bar, "Cancel", win.destroy).pack(side="left", padx=8)
+
+    def _apply_msu(self, rom_path, pack_dir):
+        """Copy an MSU-1 pack's *.pcm tracks next to the seed, renamed to match it,
+        and drop the `<seed>.msu` marker so emulators pick up the soundtrack."""
+        import glob, re, shutil
+        base = os.path.splitext(rom_path)[0]
+        pcms = glob.glob(os.path.join(pack_dir, "*.pcm"))
+        if not pcms:
+            raise RuntimeError("no .pcm tracks found in the MSU pack folder")
+        open(base + ".msu", "a").close()
+        copied = 0
+        for src in pcms:
+            m = re.search(r"-(\d+)\.pcm$", os.path.basename(src))
+            if not m:
+                continue
+            shutil.copyfile(src, f"{base}-{int(m.group(1))}.pcm")
+            copied += 1
+        if not copied:
+            raise RuntimeError("MSU tracks aren't named '<name>-<n>.pcm'")
+
+    def _generate_seed_thread(self, base, preset_name):
         import asyncio
         import pyz3r
         out_dir = os.path.join(HERE, "seeds")
         os.makedirs(out_dir, exist_ok=True)
+        patch = {**DEFAULT_PATCH, **self.cfg.get("patch", {})}
+        msu = self.cfg.get("msu", {})
+        music = patch.get("music", True)
+        msu1_resume = patch.get("msu1_resume", False)
+        if msu.get("enable"):                     # MSU pack drives the audio
+            music = False
+            msu1_resume = True
 
         async def make():
-            seed = await pyz3r.ALTTPR.generate(settings=OPEN_SEED_SETTINGS, endpoint="/api/randomizer")
+            seed = await pyz3r.ALTTPR.generate(settings=preset_settings(preset_name),
+                                               endpoint="/api/randomizer")
             hash_id = getattr(seed, "hash", None) or seed.url.rstrip("/").split("/")[-1]
             out = os.path.join(out_dir, f"{hash_id}.sfc")
             await seed.create_patched_game(
                 input_filename=base, output_filename=out,
-                heartspeed="half", heartcolor="red", spritename="Link",
-                music=True, quickswap=True, menu_speed="instant", msu1_resume=False)
+                heartspeed=patch["heartspeed"], heartcolor=patch["heartcolor"],
+                spritename=patch.get("spritename", "Link"), music=music,
+                quickswap=patch.get("quickswap", True), menu_speed=patch["menu_speed"],
+                msu1_resume=msu1_resume)
             return out, seed.url
         try:
             out, url = asyncio.run(make())
-            self.cfg["rom_path"] = out; save_settings(self.cfg)
+            if msu.get("enable") and msu.get("pack_dir"):
+                try:
+                    self._apply_msu(out, msu["pack_dir"])
+                except Exception as e:
+                    self.seedgen_q.put(("msuwarn", str(e), ""))
+            self.cfg["rom_path"] = out
+            self._remember_room_rom(out)
+            save_settings(self.cfg)
             self.seedgen_q.put(("done", out, url))
         except Exception as e:
             self.seedgen_q.put(("error", str(e), ""))
 
     def launch_emulator(self):
-        emu = self.cfg.get("emu_path"); rom = self.cfg.get("rom_path")
+        kind = self._launch_kind()
+        emu = self._emu_path(kind); rom = self.cfg.get("rom_path")
         if not emu or not os.path.exists(emu):
             self._configure_emulator(); return
-        etype = self._emu_type(emu)
         try:
-            if etype == "retroarch":
+            if kind == "retroarch":
                 core = self.cfg.get("core_path") or self._guess_core(emu)
                 if not core or not os.path.exists(core):
                     messagebox.showwarning("HyruleLink", "Pick the snes9x RetroArch core in Configure.")
@@ -1914,57 +2283,56 @@ class App(tk.Tk):
             else:
                 args = [emu] + ([rom] if rom else [])
             subprocess.Popen(args)
-            self._log(f"Launching {etype} (network-ready)…")
+            self._log(f"Launching {kind} (network-ready)…")
+            self._remember_room_rom(rom)
         except Exception as ex:
             messagebox.showerror("HyruleLink", f"Couldn't launch emulator:\n{ex}")
 
     def _configure_emulator(self):
         win = tk.Toplevel(self); win.title("Emulator setup"); win.configure(bg=BG)
-        win.geometry("580x440"); win.transient(self); pad = {"padx": 16}
-        tk.Label(win, text="Your emulator", fg=GOLD, bg=BG,
-                 font=("Segoe UI Semibold", 13)).pack(anchor="w", pady=(14, 6), **pad)
-        tk.Label(win, text="Type", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(anchor="w", **pad)
-        type_var = tk.StringVar(value=self.cfg.get("emu_type", "auto"))
-        ttk.Combobox(win, textvariable=type_var, state="readonly",
-                     values=["auto", "snes9x", "retroarch"]).pack(anchor="w", **pad)
+        win.geometry("600x470"); win.transient(self); pad = {"padx": 16}
+        tk.Label(win, text="Your emulators", fg=GOLD, bg=BG,
+                 font=("Segoe UI Semibold", 13)).pack(anchor="w", pady=(14, 2), **pad)
+        tk.Label(win, text="Set both if you like — pick which one the Launch button starts.",
+                 fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(anchor="w", **pad)
 
-        def path_row(label, key, kinds):
-            tk.Label(win, text=label, fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(anchor="w", pady=(8, 0), **pad)
-            row = tk.Frame(win, bg=BG); row.pack(fill="x", **pad)
-            e = self._entry(row, value=self.cfg.get(key, "")); e.pack(side="left", fill="x", expand=True, ipady=3)
-            def browse():
-                p = filedialog.askopenfilename(title=label, filetypes=kinds)
-                if p:
-                    e.delete(0, "end"); e.insert(0, p)
-            tk.Button(row, text="Browse…", command=browse, relief="flat", bg=PANEL, fg=INK,
-                      bd=0, padx=10).pack(side="left", padx=(6, 0))
-            return e
+        tk.Label(win, text="Launch with", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(
+            anchor="w", pady=(10, 0), **pad)
+        launch_var = tk.StringVar(value=self._launch_kind())
+        ttk.Combobox(win, textvariable=launch_var, state="readonly", style="HL.TCombobox",
+                     values=["retroarch", "snes9x"]).pack(anchor="w", **pad)
 
-        e_emu = path_row("Emulator program (.exe)", "emu_path", [("Programs", "*.exe"), ("All", "*.*")])
-        e_rom = path_row("Your ALTTPR seed (.sfc)", "rom_path", [("SNES ROM", "*.sfc *.smc"), ("All", "*.*")])
-        e_base = path_row("ALTTP JP 1.0 base ROM — only needed for “Generate seed”",
-                          "base_rom", [("SNES ROM", "*.sfc *.smc"), ("All", "*.*")])
-        e_core = path_row("RetroArch core (snes9x_libretro.dll) — RetroArch only",
-                          "core_path", [("Core", "*.dll"), ("All", "*.*")])
-        err = tk.Label(win, text="", fg=RED, bg=BG, font=("Segoe UI", 9)); err.pack(anchor="w", **pad)
+        paths = self.cfg.get("emu_paths") or {}
+        e_ra = self._path_row(win, "RetroArch program (retroarch.exe)", paths.get("retroarch", ""),
+                              [("Programs", "*.exe"), ("All", "*.*")])
+        e_core = self._path_row(win, "RetroArch core (snes9x_libretro.dll)", self.cfg.get("core_path", ""),
+                                [("Core", "*.dll"), ("All", "*.*")])
+        e_s9 = self._path_row(win, "snes9x program (snes9x.exe)", paths.get("snes9x", ""),
+                              [("Programs", "*.exe"), ("All", "*.*")])
+        e_rom = self._path_row(win, "Current seed (.sfc)", self.cfg.get("rom_path", ""),
+                               [("SNES ROM", "*.sfc *.smc"), ("All", "*.*")])
+        err = tk.Label(win, text="", fg=RED, bg=BG, font=("Segoe UI", 9)); err.pack(anchor="w", pady=(6, 0), **pad)
 
         def save():
-            emu = e_emu.get().strip()
-            if emu and not os.path.exists(emu):
-                err.config(text="emulator path not found"); return
-            self.cfg.update(emu_type=type_var.get(), emu_path=emu,
-                            rom_path=e_rom.get().strip(), base_rom=e_base.get().strip(),
-                            core_path=e_core.get().strip())
-            if self._emu_type(emu) == "retroarch" and not self.cfg["core_path"]:
-                self.cfg["core_path"] = self._guess_core(emu)
+            ra, s9 = e_ra.get().strip(), e_s9.get().strip()
+            for label, p in (("RetroArch", ra), ("snes9x", s9)):
+                if p and not os.path.exists(p):
+                    err.config(text=f"{label} path not found"); return
+            self.cfg["emu_paths"] = {"retroarch": ra, "snes9x": s9}
+            self.cfg["launch_emu"] = launch_var.get()
+            self.cfg["core_path"] = e_core.get().strip()
+            self.cfg["rom_path"] = e_rom.get().strip()
+            if launch_var.get() == "retroarch" and ra and not self.cfg["core_path"]:
+                self.cfg["core_path"] = self._guess_core(ra)
+            self._remember_room_rom(self.cfg["rom_path"])
             save_settings(self.cfg)
-            if hasattr(self, "emu_summary_lbl"):
-                self.emu_summary_lbl.config(text=self._emu_summary())
+            self._refresh_emu_summary()
             win.destroy()
 
         bar = tk.Frame(win, bg=BG); bar.pack(anchor="w", pady=12, **pad)
         self._button(bar, "Save", save, primary=True).pack(side="left")
-        self._button(bar, "Cancel", win.destroy).pack(side="left", padx=8)
+        self._button(bar, "Seed & patch…", self._seed_dialog).pack(side="left", padx=8)
+        self._button(bar, "Cancel", win.destroy).pack(side="left")
 
     # ── periodic refresh ────────────────────────────────────────────────────
     def _tick(self):
@@ -2036,11 +2404,12 @@ class App(tk.Tk):
             except queue.Empty:
                 break
             if kind == "done":
-                self._log(f"✓ Seed ready: {os.path.basename(a)} — click Launch emulator.")
-                if hasattr(self, "emu_summary_lbl"):
-                    self.emu_summary_lbl.config(text=self._emu_summary())
+                self._log(f"✓ Seed ready: {os.path.basename(a)} — click Launch.")
+                self._refresh_emu_summary()
                 messagebox.showinfo("HyruleLink",
-                    f"Open seed generated and set as your ROM:\n{a}\n\nClick “Launch emulator”.")
+                    f"Seed generated and set as your ROM:\n{a}\n\nClick “Launch”.")
+            elif kind == "msuwarn":
+                self._log("⚠ MSU pack not applied: " + a)
             else:
                 self._log("Seed generation failed: " + a)
                 messagebox.showerror("HyruleLink", "Couldn't generate a seed:\n" + a)
