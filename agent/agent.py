@@ -33,6 +33,8 @@ _ITEMS_BY_ADDR = {}
 for _it in ITEMS:
     _ITEMS_BY_ADDR.setdefault(_it.addr, []).append(_it)
 _TRACKED_ADDRS = sorted(_ITEMS_BY_ADDR.keys())
+_TRACKED_START = _TRACKED_ADDRS[0]
+_TRACKED_SIZE = _TRACKED_ADDRS[-1] - _TRACKED_START + 1
 
 
 class HyruleAgent:
@@ -180,11 +182,15 @@ class HyruleAgent:
         if not gm or int(gm[0]) not in PLAYABLE_MODES:
             return
 
+        # All inventory bytes occupy one small contiguous SRAM-mirror range.
+        # Reading it once cuts RetroArch UDP traffic from ~23 round trips per
+        # poll to one, which materially reduces dropped replies and UI flicker.
+        snapshot = self.t.read_memory(_TRACKED_START, size=_TRACKED_SIZE)
+        if not snapshot or len(snapshot) < _TRACKED_SIZE:
+            return
+
         for addr in _TRACKED_ADDRS:
-            data = self.t.read_memory(addr, size=1)
-            if not data:
-                continue
-            raw = int(data[0])
+            raw = int(snapshot[addr - _TRACKED_START])
             with self._lock:
                 old = self._baseline.get(addr)
                 exp = self._expected.get(addr)
@@ -207,9 +213,11 @@ class HyruleAgent:
             for key, level in pickups:
                 self._send_pickup(key, level)
 
-        self._enforce_boots_ability()
+        ability = (int(snapshot[ABILITY_ADDR - _TRACKED_START])
+                   if _TRACKED_START <= ABILITY_ADDR < _TRACKED_START + _TRACKED_SIZE else None)
+        self._enforce_boots_ability(ability)
 
-    def _enforce_boots_ability(self):
+    def _enforce_boots_ability(self, ability_byte=None):
         """Keep the dash-ability flag ($7EF379 bit 0x04) in sync with ownership.
 
         Dashing is gated by this flag, not the boots inventory byte, and ALttP
@@ -217,14 +225,16 @@ class HyruleAgent:
         set after a lost revoke (run without boots). So every poll: set it if we
         own the boots, clear it if we don't. Writes only when it's actually
         wrong, so it's cheap and self-heals dropped grant/revoke writes."""
-        data = self.t.read_memory(ABILITY_ADDR, size=1)
-        if not data:
-            return
-        have = bool(data[0] & RUN_ABILITY_MASK)
+        if ability_byte is None:
+            data = self.t.read_memory(ABILITY_ADDR, size=1)
+            if not data:
+                return
+            ability_byte = int(data[0])
+        have = bool(ability_byte & RUN_ABILITY_MASK)
         if self._boots_owned and not have:
-            self.t.write_memory(ABILITY_ADDR, bytes([data[0] | RUN_ABILITY_MASK]))
+            self.t.write_memory(ABILITY_ADDR, bytes([ability_byte | RUN_ABILITY_MASK]))
         elif not self._boots_owned and have:
-            self.t.write_memory(ABILITY_ADDR, bytes([data[0] & ~RUN_ABILITY_MASK]))
+            self.t.write_memory(ABILITY_ADDR, bytes([ability_byte & ~RUN_ABILITY_MASK]))
 
     def _on_emu_reconnect(self):
         """Emulator came back (e.g. crash + save reload). Re-seed detection from

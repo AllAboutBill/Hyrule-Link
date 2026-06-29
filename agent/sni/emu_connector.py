@@ -46,6 +46,8 @@ NWA_TIMEOUT = 0.8  # seconds
 RA_HOST = "127.0.0.1"
 RA_PORT = 55355
 RA_TIMEOUT = 0.8  # seconds
+RA_READ_RETRIES = 2
+READ_FAILURE_LIMIT = 3
 
 
 class _EmuNWAClient:
@@ -227,18 +229,25 @@ class _RetroArchClient:
             return False
 
     def read_memory(self, address, size):
-        try:
-            self._ensure_sock()
-            cmd = f"READ_CORE_RAM {address:X} {size}\n"
-            self._sock.sendto(cmd.encode(), self.addr)
-            data, _ = self._sock.recvfrom(65536)
-            parts = data.decode(errors="replace").split()
-            # "READ_CORE_RAM <addr> <b0> <b1> ..."  /  error: "... -1"
-            if len(parts) < 3 or parts[2] == "-1":
-                return None
-            return bytes(int(b, 16) for b in parts[2:])
-        except (OSError, ValueError):
-            return None
+        self._ensure_sock()
+        cmd = f"READ_CORE_RAM {address:X} {size}\n".encode()
+        for _ in range(RA_READ_RETRIES):
+            try:
+                self._sock.sendto(cmd, self.addr)
+                data, _ = self._sock.recvfrom(65536)
+                parts = data.decode(errors="replace").split()
+                # Ignore a late UDP reply for an earlier request instead of
+                # interpreting its bytes as the current address.
+                if len(parts) < 3 or parts[0] != "READ_CORE_RAM":
+                    continue
+                response_addr = int(parts[1], 16)
+                if response_addr != address or parts[2] == "-1":
+                    continue
+                payload = bytes(int(b, 16) for b in parts[2:])
+                return payload[:size] if len(payload) >= size else None
+            except (OSError, ValueError):
+                continue
+        return None
 
     def write_memory(self, address, data):
         try:
@@ -299,15 +308,20 @@ class EmuConnector:
         self.debug = debug
         self.connected = False
         self._lock = threading.RLock()
-        all_sources = [
-            ("Snes9x-NWA", _EmuNWAClient()),
-            ("RetroArch", _RetroArchClient()),
-        ]
         pin = {"nwa": "Snes9x-NWA", "snes9x": "Snes9x-NWA",
                "retroarch": "RetroArch", "ra": "RetroArch"}.get(
             (source or "").lower())
+        # When NWA is pinned to a specific port, bind the client to it instead of
+        # auto-scanning — lets two snes9x-nwa instances on one PC be told apart.
+        nwa_client = (_EmuNWAClient(port=port) if pin == "Snes9x-NWA" and port
+                      else _EmuNWAClient())
+        all_sources = [
+            ("Snes9x-NWA", nwa_client),
+            ("RetroArch", _RetroArchClient()),
+        ]
         self._sources = [s for s in all_sources if pin is None or s[0] == pin]
         self._active = None  # label of the source that last responded
+        self._read_failures = 0
 
     # -- connection ----------------------------------------------------------
     def connect(self):
@@ -317,12 +331,15 @@ class EmuConnector:
                     if client.connect():
                         self._active = name
                         self.connected = True
+                        self._read_failures = 0
                         logger.info(f"[EmuConnector] Connected via {name}")
                         return True
                 except Exception as e:
                     if self.debug:
                         logger.debug(f"[EmuConnector] {name} connect failed: {e}")
             self.connected = False
+            self._active = None
+            self._read_failures = 0
             return False
 
     def disconnect(self):
@@ -334,6 +351,7 @@ class EmuConnector:
                     pass
             self.connected = False
             self._active = None
+            self._read_failures = 0
 
     def _ordered(self):
         """Sources with the last-working one first."""
@@ -353,14 +371,36 @@ class EmuConnector:
     # -- memory --------------------------------------------------------------
     def read_memory(self, address, size=1, domain="WRAM"):
         with self._lock:
-            for name, client in self._ordered():
+            # A single missed local UDP reply is not a disconnect. Keep using
+            # the active source until several consecutive reads fail; any good
+            # read immediately restores confidence.
+            active_name = self._active
+            active_client = self._active_client()
+            if active_client is not None:
+                data = active_client.read_memory(address, size)
+                if data is not None:
+                    self.connected = True
+                    self._read_failures = 0
+                    return data
+                self._read_failures += 1
+                if self._read_failures < READ_FAILURE_LIMIT:
+                    if self.debug:
+                        logger.debug("[EmuConnector] transient read miss %s/%s via %s",
+                                     self._read_failures, READ_FAILURE_LIMIT, active_name)
+                    return None
+
+            for name, client in self._sources:
+                if name == active_name:
+                    continue
                 data = client.read_memory(address, size)
                 if data is not None:
                     self._active = name
                     self.connected = True
+                    self._read_failures = 0
                     return data
             self._active = None
             self.connected = False
+            self._read_failures = 0
             return None
 
     def write_memory(self, address, data, domain="WRAM"):
