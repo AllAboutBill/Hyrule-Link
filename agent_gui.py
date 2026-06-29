@@ -82,6 +82,90 @@ def _lighten(hexcol, amt=0.12):
     r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
     f = lambda c: max(0, min(255, int(c + (255 - c) * amt)))
     return "#%02x%02x%02x" % (f(r), f(g), f(b))
+
+
+# ── custom ruleset (mirrors server/ledger.py DEFAULT_RULES + presets) ────────
+RULE_DEFAULTS = {
+    "claiming": True, "require_found_to_claim": True, "open_season_scope": "owned",
+    "steal_cooldown_s": 5, "cooldown_scope": "item", "steal_back_lock_s": 0, "steal_budget_per_min": 0,
+    "hold_limit_s": 0, "hold_expiry": "next_finder", "tenure_lock_s": 0, "idle_release_s": 0,
+    "borrow_s": 0, "borrow_revert": "prev_owner",
+    "auto_shuffle_s": 0, "shuffle_scope": "all", "shared_discovery": False,
+}
+RULE_PRESETS = {
+    "normal": {},
+    "hot_potato": {"claiming": False, "hold_limit_s": 120, "hold_expiry": "next_finder"},
+    "chaos": {"claiming": False, "auto_shuffle_s": 120, "shuffle_scope": "all"},
+    "cutthroat": {"require_found_to_claim": False, "open_season_scope": "owned",
+                  "cooldown_scope": "thief", "steal_cooldown_s": 20,
+                  "steal_budget_per_min": 3, "steal_back_lock_s": 30},
+    "lease": {"claiming": True, "hold_limit_s": 300, "hold_expiry": "release"},
+    "raid": {"require_found_to_claim": False, "borrow_s": 120, "borrow_revert": "prev_owner"},
+    "siege": {"claiming": True, "tenure_lock_s": 240},
+}
+# (section title, [(key, kind, label, [enum choices])])
+RULE_FIELDS = [
+    ("Claiming & stealing", [
+        ("claiming", "bool", "Allow manual claiming", None),
+        ("require_found_to_claim", "bool", "Must have found it to claim", None),
+        ("open_season_scope", "enum", "Open-season scope", ["owned", "any"]),
+        ("steal_cooldown_s", "num", "Steal cooldown (s)", None),
+        ("cooldown_scope", "enum", "Cooldown applies to", ["item", "thief", "victim", "none"]),
+        ("steal_back_lock_s", "num", "Steal-back lock (s)", None),
+        ("steal_budget_per_min", "num", "Max steals/min (0=∞)", None),
+    ]),
+    ("Holding / leases", [
+        ("hold_limit_s", "num", "Hold limit (s, 0=off)", None),
+        ("hold_expiry", "enum", "On expiry", ["next_finder", "release", "return_finder"]),
+        ("tenure_lock_s", "num", "Unstealable after (s)", None),
+        ("idle_release_s", "num", "Drop items when offline (s)", None),
+    ]),
+    ("Raid (unfound steals — when found-gate is off)", [
+        ("borrow_s", "num", "Borrow duration (s, 0=permanent)", None),
+        ("borrow_revert", "enum", "Revert to", ["prev_owner", "pool"]),
+    ]),
+    ("Stackable layers", [
+        ("auto_shuffle_s", "num", "Auto-reshuffle every (s, 0=off)", None),
+        ("shuffle_scope", "enum", "Reshuffle which", ["all", "unowned", "idle"]),
+        ("shared_discovery", "bool", "Shared discovery", None),
+    ]),
+]
+
+
+def summarize_rules(r):
+    """Plain-English one-liner for a ruleset (mirror of the server's)."""
+    p = []
+    if r.get("claiming"):
+        if r.get("require_found_to_claim"):
+            p.append("claim found items")
+        else:
+            p.append("steal anything someone owns" if r.get("open_season_scope") == "owned"
+                     else "claim anything")
+        cd, scope = int(r.get("steal_cooldown_s", 0)), r.get("cooldown_scope")
+        if cd and scope != "none":
+            p.append(f"{cd}s {scope} cooldown")
+        if r.get("steal_back_lock_s"):
+            p.append(f"{int(r['steal_back_lock_s'])}s steal-back lock")
+        if r.get("steal_budget_per_min"):
+            p.append(f"max {int(r['steal_budget_per_min'])} steals/min")
+    else:
+        p.append("no manual claiming")
+    if r.get("hold_limit_s"):
+        ex = {"next_finder": "→ next finder", "release": "→ released",
+              "return_finder": "→ first finder"}.get(r.get("hold_expiry"), "")
+        p.append(f"hold {int(r['hold_limit_s'])}s {ex}".strip())
+    if r.get("tenure_lock_s"):
+        p.append(f"unstealable after {int(r['tenure_lock_s'])}s")
+    if r.get("idle_release_s"):
+        p.append(f"drop items when offline {int(r['idle_release_s'])}s")
+    if not r.get("require_found_to_claim") and r.get("borrow_s"):
+        rev = "to owner" if r.get("borrow_revert") == "prev_owner" else "to pool"
+        p.append(f"borrows revert {rev} after {int(r['borrow_s'])}s")
+    if r.get("auto_shuffle_s"):
+        p.append(f"reshuffle {r.get('shuffle_scope')} every {int(r['auto_shuffle_s'])}s")
+    if r.get("shared_discovery"):
+        p.append("shared discovery")
+    return " · ".join(p)
 # states; "mine" reads mint, "owned by another" reads blue, "owner/host" stays gold.
 
 
@@ -984,9 +1068,9 @@ class App(tk.Tk):
         tk.Label(c, text="mode", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(2, 4))
         self.mode_var = tk.StringVar(value="normal")
         cb = ttk.Combobox(c, textvariable=self.mode_var, state="readonly", width=11,
-                          values=["normal", "hot_potato", "chaos"])
+                          values=["normal", "hot_potato", "chaos", "custom"])
         cb.pack(side="left")
-        cb.bind("<<ComboboxSelected>>", lambda e: self._sync_mode_fields())
+        cb.bind("<<ComboboxSelected>>", lambda e: self._on_mode_pick())
         # steal cooldown — Normal only (you can claim/steal there)
         self.cd_group = tk.Frame(c, bg=BG)
         tk.Label(self.cd_group, text="steal cooldown", fg=MUTED, bg=BG,
@@ -1004,22 +1088,132 @@ class App(tk.Tk):
         self.shuffle_group.pack(side="left")
         self._apply_btn = self._button(c, "Apply", self._apply_host, small=True)
         self._apply_btn.pack(side="left", padx=8)
+        self._custom_btn = self._button(c, "Customize ruleset…", self._open_rules, small=True)
+        # packed/unpacked by _sync_mode_fields
         tk.Label(c, text="· click player=remove · right-click item=manage",
                  fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=8)
         self._sync_mode_fields()
         self._apply_host_collapse()
 
     def _sync_mode_fields(self):
-        """Show 'steal cooldown' only in Normal and 'shuffle every…' only in the
-        shuffle modes — both sit right after the mode selector, never both at once."""
+        """Show only the control the chosen mode uses: cooldown (Normal), shuffle
+        interval (shuffle presets), or the Customize button (Custom). The Apply
+        button stays put so it never reflows past the trailing hint."""
         if not hasattr(self, "cd_group"):
             return
-        if self.mode_var.get() == "normal":
-            self.shuffle_group.pack_forget()
+        m = self.mode_var.get()
+        self.cd_group.pack_forget()
+        self.shuffle_group.pack_forget()
+        self._custom_btn.pack_forget()
+        if m == "custom":
+            self._custom_btn.pack(side="left", before=self._apply_btn)
+        elif m == "normal":
             self.cd_group.pack(side="left", before=self._apply_btn)
         else:
-            self.cd_group.pack_forget()
             self.shuffle_group.pack(side="left", before=self._apply_btn)
+
+    def _on_mode_pick(self):
+        self._sync_mode_fields()
+        if self.mode_var.get() == "custom":
+            self._open_rules()
+
+    # ── custom ruleset editor ────────────────────────────────────────────────
+    def _open_rules(self):
+        win = getattr(self, "_rules_win", None)
+        if win is not None and win.winfo_exists():
+            win.lift(); return
+        win = tk.Toplevel(self); win.title("Custom ruleset"); win.configure(bg=BG)
+        win.transient(self); win.geometry("600x700")
+        self._rules_win = win
+        win.protocol("WM_DELETE_WINDOW", lambda: (setattr(self, "_rules_win", None), win.destroy()))
+
+        tk.Label(win, text="🎛️ Custom ruleset", fg=ACCENT, bg=BG,
+                 font=(self.logo_font, 13, "bold")).pack(anchor="w", padx=14, pady=(12, 2))
+        pf = tk.Frame(win, bg=BG); pf.pack(fill="x", padx=14, pady=(2, 6))
+        tk.Label(pf, text="Start from:", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
+        for name in ("normal", "hot_potato", "chaos", "cutthroat", "lease", "raid", "siege"):
+            self._button(pf, name, lambda n=name: self._fill_rules({**RULE_DEFAULTS, **RULE_PRESETS[n]}),
+                         small=True).pack(side="left", padx=2)
+
+        self._rules_summary_lbl = tk.Label(
+            win, text="", fg=INK, bg=PANEL, font=("Segoe UI", 9), wraplength=560,
+            justify="left", anchor="w", highlightbackground=LINE, highlightthickness=1, padx=8, pady=6)
+        self._rules_summary_lbl.pack(fill="x", padx=14, pady=(2, 8))
+
+        body = tk.Frame(win, bg=BG); body.pack(fill="both", expand=True, padx=14)
+        self._rule_vars = {}
+        for title, fields in RULE_FIELDS:
+            sec = tk.Frame(body, bg=BG, highlightbackground=LINE, highlightthickness=1)
+            sec.pack(fill="x", pady=(0, 8))
+            tk.Label(sec, text=title, fg=ACCENT2, bg=BG,
+                     font=("Segoe UI Semibold", 9)).pack(anchor="w", padx=8, pady=(6, 2))
+            for key, kind, label, choices in fields:
+                row = tk.Frame(sec, bg=BG); row.pack(fill="x", padx=10, pady=2)
+                if kind == "bool":
+                    var = tk.BooleanVar()
+                    tk.Checkbutton(row, text=label, variable=var, fg=INK, bg=BG, selectcolor=PANEL2,
+                                   activebackground=BG, activeforeground=INK, font=("Segoe UI", 9),
+                                   command=self._refresh_rules).pack(side="left")
+                elif kind == "enum":
+                    tk.Label(row, text=label, fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left")
+                    var = tk.StringVar()
+                    cbx = ttk.Combobox(row, textvariable=var, state="readonly", width=14, values=choices)
+                    cbx.pack(side="left", padx=6)
+                    cbx.bind("<<ComboboxSelected>>", lambda e: self._refresh_rules())
+                else:                                       # numeric
+                    tk.Label(row, text=label, fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left")
+                    var = tk.StringVar()
+                    ent = self._entry(row); ent.configure(width=6, textvariable=var); ent.pack(side="left", padx=6)
+                    var.trace_add("write", lambda *a: self._refresh_rules())
+                self._rule_vars[key] = (kind, var)
+
+        af = tk.Frame(win, bg=BG); af.pack(fill="x", padx=14, pady=10)
+        self._button(af, "Apply ruleset", self._apply_rules, primary=True).pack(side="right")
+        self._button(af, "Cancel",
+                     lambda: (setattr(self, "_rules_win", None), win.destroy())).pack(side="right", padx=6)
+
+        self._fill_rules(self.state.get("rules") or dict(RULE_DEFAULTS))
+
+    def _fill_rules(self, r):
+        r = {**RULE_DEFAULTS, **(r or {})}
+        for key, (kind, var) in self._rule_vars.items():
+            v = r.get(key, RULE_DEFAULTS.get(key))
+            if kind == "bool":
+                var.set(bool(v))
+            elif kind == "enum":
+                var.set(str(v))
+            else:
+                try:
+                    var.set(str(int(float(v))))
+                except (TypeError, ValueError):
+                    var.set("0")
+        self._refresh_rules()
+
+    def _read_rules(self):
+        out = {}
+        for key, (kind, var) in self._rule_vars.items():
+            if kind == "bool":
+                out[key] = bool(var.get())
+            elif kind == "enum":
+                out[key] = var.get()
+            else:
+                try:
+                    out[key] = float(var.get() or 0)
+                except ValueError:
+                    out[key] = 0
+        return out
+
+    def _refresh_rules(self):
+        lbl = getattr(self, "_rules_summary_lbl", None)
+        if lbl is not None and lbl.winfo_exists():
+            lbl.config(text=summarize_rules(self._read_rules()) or "—")
+
+    def _apply_rules(self):
+        self._ui_send({"type": "admin_set_rules", "rules": self._read_rules()})
+        win = getattr(self, "_rules_win", None)
+        if win is not None and win.winfo_exists():
+            win.destroy()
+        self._rules_win = None
 
     def _toggle_host_controls(self):
         self._host_collapsed = not self._host_collapsed
@@ -1058,6 +1252,9 @@ class App(tk.Tk):
         shuffle timer and spam an event, so we guard against no-op re-applies."""
         st = self.state or {}
         mode = self.mode_var.get()
+        if mode == "custom":            # custom is driven by the rules popup, not here
+            self._open_rules()
+            return
         try:
             shuffle = float(self.e_shuffle.get() or 120)
         except ValueError:
@@ -1085,16 +1282,14 @@ class App(tk.Tk):
         if not self.state or mode == "normal":
             self.mode_banner.pack_forget()
             return
-        every = self._clock(self.state.get("shuffle_s", 120))
-        if mode == "chaos":
-            rem = self._clock(self.state.get("shuffle_remaining", 0))
-            self.mode_banner.config(
-                text=f"🌀 Chaos — everything reshuffles every {every} · next in {rem}",
-                fg=ACCENT2, highlightbackground=ACCENT2)
-        else:
-            self.mode_banner.config(
-                text=f"🔥 Hot Potato — each item passes to the next online finder every {every}. No claiming.",
-                fg=GOLD, highlightbackground=GOLD)
+        summary = self.state.get("rules_summary", "")
+        rem = self.state.get("shuffle_remaining", 0)
+        nxt = f" · next reshuffle in {self._clock(rem)}" if rem > 0 else ""
+        icon, color = {"chaos": ("🌀", ACCENT2), "hot_potato": ("🔥", GOLD),
+                       "custom": ("🎛️", ACCENT)}.get(mode, ("🎛️", ACCENT))
+        label = {"chaos": "Chaos", "hot_potato": "Hot Potato", "custom": "Custom"}.get(mode, "Custom")
+        self.mode_banner.config(text=f"{icon} {label} — {summary}{nxt}",
+                                fg=color, highlightbackground=color)
         self.mode_banner.pack(fill="x", pady=(0, 6), before=self.board_wrap)
 
     # ── board rendering ─────────────────────────────────────────────────────
@@ -1198,7 +1393,8 @@ class App(tk.Tk):
         you = s.get("you")
         mode = s.get("mode", "normal")
         parts = [you, mode, self._is_host(), self._board_columns(),
-                 self._room_title(), self._avatar_version]
+                 self._room_title(), self._avatar_version,
+                 s.get("claiming"), s.get("rules_summary")]   # rules affect the cards
         ledger = s.get("ledger", {})
         for it in ITEMS:
             e = ledger.get(it.key)
@@ -1209,7 +1405,9 @@ class App(tk.Tk):
                     it.key, e.get("owner"), e.get("owner_name"), e.get("tier"),
                     e.get("level"), you in e.get("discovered", []),
                     round(e.get("cooldown_remaining", 0) or 0),
-                    round(e.get("hold_remaining", 0) or 0) if mode == "hot_potato" else None,
+                    round(e.get("hold_remaining", 0) or 0) if e.get("hold_remaining") is not None else None,
+                    round(e.get("borrow_remaining", 0) or 0) if e.get("borrow_remaining") is not None else None,
+                    e.get("locked"),
                 ))
         for p in s.get("players", []):
             parts.append((p.get("id"), p.get("name"), p.get("agent"),
@@ -1312,31 +1510,40 @@ class App(tk.Tk):
         tk.Label(inner, text=sub, fg=MUTED, bg=PANEL, font=("Segoe UI", 8)).pack(side="left")
 
         mode = self.state.get("mode", "normal")
+        claiming = self.state.get("claiming", mode == "normal")
+        need_found = self.state.get("rules", {}).get("require_found_to_claim", True)
         action = tk.Frame(card, bg=PANEL); action.pack(pady=(1, 4))
         if not e:
             tk.Label(action, text="—", fg=MUTED, bg=PANEL, font=("Segoe UI", 8)).pack()
-        elif mode != "normal":
-            # shuffle modes: no claiming — show ownership + hot-potato hold timer
+        elif not claiming:
+            # no manual claiming — just show ownership
             if mine:
                 tk.Label(action, text="✓ yours", fg=GREEN, bg=PANEL,
                          font=("Segoe UI Semibold", 9)).pack()
-            if mode == "hot_potato" and e.get("owner") and e.get("hold_remaining") is not None:
-                tk.Label(action, text=f"⏱ {self._clock(e['hold_remaining'])}", fg=GOLD, bg=PANEL,
-                         font=("Segoe UI", 8)).pack()
-            elif not mine:
+            elif not e.get("owner"):
                 tk.Label(action, text="—", fg=MUTED, bg=PANEL, font=("Segoe UI", 8)).pack()
         elif mine:
             tk.Label(action, text="✓ you hold this", fg=GREEN, bg=PANEL,
                      font=("Segoe UI Semibold", 9)).pack()
-        elif you not in e.get("discovered", []):
+        elif e.get("locked"):
+            tk.Label(action, text="🔒 secured", fg=GOLD, bg=PANEL, font=("Segoe UI", 8)).pack()
+        elif need_found and you not in e.get("discovered", []):
             tk.Label(action, text="find one to claim", fg=GOLD, bg=PANEL,
                      font=("Segoe UI", 8)).pack()
         elif e.get("cooldown_remaining", 0) > 0.05:
             tk.Label(action, text=f"cooldown {e['cooldown_remaining']:.0f}s", fg=MUTED, bg=PANEL,
                      font=("Segoe UI", 8)).pack()
         else:
-            self._button(action, "Claim", lambda k=cat["key"]: self._ui_send({"type": "claim", "item": k}),
+            label = "Steal" if (not need_found and e.get("owner") and not mine) else "Claim"
+            self._button(action, label, lambda k=cat["key"]: self._ui_send({"type": "claim", "item": k}),
                          small=True).pack()
+        # timers shared across modes: hold (hot-potato), borrow lease
+        if e and e.get("owner") and e.get("hold_remaining") is not None:
+            tk.Label(action, text=f"⏱ {self._clock(e['hold_remaining'])}", fg=GOLD, bg=PANEL,
+                     font=("Segoe UI", 8)).pack()
+        if e and e.get("borrow_remaining") is not None:
+            tk.Label(action, text=f"⏳ {self._clock(e['borrow_remaining'])}", fg=ACCENT2, bg=PANEL,
+                     font=("Segoe UI", 8)).pack()
         # hover: brighten the card's edge as the pointer moves over it. Bound
         # across all children (add="+", debounced) so crossing inner widgets
         # doesn't flicker the highlight off.

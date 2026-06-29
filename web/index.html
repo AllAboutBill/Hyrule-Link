@@ -101,6 +101,7 @@
               <option value="normal">Normal (claim)</option>
               <option value="hot_potato">🔥 Hot Potato</option>
               <option value="chaos">🌀 Chaos</option>
+              <option value="custom">🎛️ Custom…</option>
             </select>
           </label>
           <label id="admin-cooldown-wrap">steal cooldown
@@ -110,6 +111,7 @@
             <input id="admin-shuffle" type="number" min="5" step="5" style="width:5em" /> s
           </label>
           <button id="admin-mode-apply" class="small">Apply</button>
+          <button id="admin-custom-open" class="small hidden">Customize ruleset…</button>
         </div>
         <p class="muted">🔥 <strong>Hot Potato</strong>: each found item auto-passes to the next
           online finder after the timer. 🌀 <strong>Chaos</strong>: every found item randomly
@@ -145,6 +147,74 @@
       </div>
     </section>
   </main>
+
+  <!-- Custom ruleset editor (host-only) -->
+  <div id="rules-modal" class="modal-backdrop hidden">
+    <div class="modal card">
+      <h3>🎛️ Custom ruleset</h3>
+      <div class="rules-presets">
+        <span class="muted">Start from:</span>
+        <button class="small ghost" data-preset="normal">Normal</button>
+        <button class="small ghost" data-preset="hot_potato">Hot Potato</button>
+        <button class="small ghost" data-preset="chaos">Chaos</button>
+        <button class="small ghost" data-preset="cutthroat">Cutthroat</button>
+        <button class="small ghost" data-preset="lease">Lease</button>
+        <button class="small ghost" data-preset="raid">Raid</button>
+        <button class="small ghost" data-preset="siege">Siege</button>
+      </div>
+      <div id="rules-summary" class="rules-summary"></div>
+
+      <div class="rules-grid">
+        <fieldset>
+          <legend>Claiming &amp; stealing</legend>
+          <label class="rules-check"><input type="checkbox" id="r-claiming"> Allow manual claiming</label>
+          <label class="rules-check"><input type="checkbox" id="r-found"> Must have found it to claim</label>
+          <label id="r-openseason-wrap">Open-season scope
+            <select id="r-openseason"><option value="owned">only items someone owns</option><option value="any">anything</option></select>
+          </label>
+          <label>Steal cooldown <input type="number" id="r-cd" min="0" step="1" style="width:5em"> s</label>
+          <label>Cooldown applies to
+            <select id="r-cdscope"><option value="item">the item</option><option value="thief">the thief</option><option value="victim">the victim (shield)</option><option value="none">nobody (off)</option></select>
+          </label>
+          <label>Steal-back lock <input type="number" id="r-sbl" min="0" step="1" style="width:5em"> s</label>
+          <label>Max steals / player / min <input type="number" id="r-budget" min="0" step="1" style="width:5em"> <span class="muted">(0 = ∞)</span></label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Holding / leases</legend>
+          <label>Hold limit <input type="number" id="r-hold" min="0" step="5" style="width:5em"> s <span class="muted">(0 = off)</span></label>
+          <label id="r-holdexp-wrap">On expiry
+            <select id="r-holdexp"><option value="next_finder">pass to next finder</option><option value="release">release to pool</option><option value="return_finder">return to first finder</option></select>
+          </label>
+          <label>Unstealable after <input type="number" id="r-tenure" min="0" step="5" style="width:5em"> s <span class="muted">(0 = off)</span></label>
+          <label>Drop items when offline <input type="number" id="r-idle" min="0" step="5" style="width:5em"> s <span class="muted">(0 = off)</span></label>
+        </fieldset>
+
+        <fieldset id="r-raid-wrap">
+          <legend>Raid (unfound steals)</legend>
+          <p class="muted">Active when “must have found it” is off.</p>
+          <label>Borrow duration <input type="number" id="r-borrow" min="0" step="5" style="width:5em"> s <span class="muted">(0 = permanent)</span></label>
+          <label id="r-borrowrev-wrap">Revert to
+            <select id="r-borrowrev"><option value="prev_owner">previous owner</option><option value="pool">the pool</option></select>
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Stackable layers</legend>
+          <label>Auto-reshuffle every <input type="number" id="r-shuffle" min="0" step="5" style="width:5em"> s <span class="muted">(0 = off)</span></label>
+          <label id="r-shufscope-wrap">Reshuffle which
+            <select id="r-shufscope"><option value="all">all items</option><option value="unowned">only unowned</option><option value="idle">only idle</option></select>
+          </label>
+          <label class="rules-check"><input type="checkbox" id="r-shared"> Shared discovery (anyone finds → everyone can claim)</label>
+        </fieldset>
+      </div>
+
+      <div class="rules-actions">
+        <button id="rules-cancel" class="ghost">Cancel</button>
+        <button id="rules-apply" class="primary">Apply ruleset</button>
+      </div>
+    </div>
+  </div>
 
   <script src="/static/app.js"></script>
   <script src="/static/nexus-bg.js"></script>

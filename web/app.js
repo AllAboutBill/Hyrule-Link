@@ -323,6 +323,9 @@ function handleMsg(msg) {
     state.players = msg.players || [];
     state.cooldown_s = msg.cooldown_s;
     state.mode = msg.mode || "normal";
+    state.rules = msg.rules || null;
+    state.claiming = msg.claiming !== undefined ? !!msg.claiming : (state.mode === "normal");
+    state.rules_summary = msg.rules_summary || "";
     state.shuffle_s = msg.shuffle_s || 120;
     state.shuffle_remaining = msg.shuffle_remaining || 0;
     renderModeBanner();
@@ -386,9 +389,11 @@ function renderModeBanner() {
   if (!state.room || state.mode === "normal") { b.classList.add("hidden"); return; }
   b.classList.remove("hidden");
   b.classList.toggle("chaos", state.mode === "chaos");
-  b.innerHTML = state.mode === "chaos"
-    ? `🌀 <strong>Chaos</strong> — every found item reshuffles each ${fmtClock(state.shuffle_s)} · next in <strong>${fmtClock(state.shuffle_remaining)}</strong>`
-    : `🔥 <strong>Hot Potato</strong> — each item passes to the next online finder every ${fmtClock(state.shuffle_s)}. No claiming.`;
+  const icon = { chaos: "🌀", hot_potato: "🔥", custom: "🎛️" }[state.mode] || "🎛️";
+  const label = { chaos: "Chaos", hot_potato: "Hot Potato", custom: "Custom" }[state.mode] || "Custom";
+  const next = state.shuffle_remaining > 0
+    ? ` · next reshuffle in <strong>${fmtClock(state.shuffle_remaining)}</strong>` : "";
+  b.innerHTML = `${icon} <strong>${label}</strong> — ${escapeHtml(state.rules_summary || "")}${next}`;
 }
 
 function renderAdmin() {
@@ -461,10 +466,10 @@ function cardHtml(cat, e) {
   const cd = e.cooldown_remaining;
   const onCooldown = cd > 0.05;
   const cls = mine ? "mine" : (e.owner ? "owned" : "unowned");
-  // claiming only in Normal mode for a real player (not watcher/admin/shuffle mode)
-  const canPlay = !state.spectator && state.you != null && state.mode === "normal";
+  // claiming requires the ruleset to allow it (real player, not watcher/admin)
+  const canPlay = !state.spectator && state.you != null && state.claiming;
   let action = "";
-  if (mine && state.mode !== "normal") {
+  if (mine && !state.claiming) {
     action = `<div class="held">✓ yours</div>`;
   } else if (!canPlay) {
     action = "";                                 // watcher / admin / shuffle mode: read-only
@@ -477,8 +482,13 @@ function cardHtml(cat, e) {
   } else {
     action = `<button data-claim="${cat.key}">Claim</button>`;
   }
-  const holdTimer = (state.mode === "hot_potato" && e.owner && e.hold_remaining != null)
-    ? `<div class="item-sub hold">⏱ ${fmtClock(e.hold_remaining)}</div>` : "";
+  let holdTimer = "";
+  if (e.owner && e.hold_remaining != null)
+    holdTimer += `<div class="item-sub hold">⏱ ${fmtClock(e.hold_remaining)}</div>`;
+  if (e.borrow_remaining != null)
+    holdTimer += `<div class="item-sub hold">⏳ borrowed ${fmtClock(e.borrow_remaining)}</div>`;
+  if (e.locked)
+    holdTimer += `<div class="item-sub held">🔒 secured</div>`;
   const owner = e.owner ? escapeHtml(e.owner_name || "?") : "unowned";
   const ownerP = e.owner ? state.players.find((p) => p.id === e.owner) : null;
   const ownerAv = ownerP ? avatarImg(ownerP.avatar, "oavatar") : "";
@@ -510,8 +520,12 @@ function startCooldownTick() {
         e.hold_remaining = Math.max(0, e.hold_remaining - 1);
         dirty = true;
       }
+      if (e.borrow_remaining != null && e.borrow_remaining > 0) {
+        e.borrow_remaining = Math.max(0, e.borrow_remaining - 1);
+        dirty = true;
+      }
     }
-    if (state.mode === "chaos" && state.shuffle_remaining > 0) {
+    if (state.shuffle_remaining > 0) {
       state.shuffle_remaining = Math.max(0, state.shuffle_remaining - 1);
       renderModeBanner();
     }
@@ -555,17 +569,111 @@ $("admin-mode-apply").onclick = () => {
     sendWS({ type: "admin_set_cooldown", seconds: cooldown });
 };
 
-// Steal cooldown only applies in Normal (you claim/steal there); "shuffle every…"
-// only applies in the shuffle modes. Both sit right after the mode selector;
-// show only the one the chosen mode uses, updating live on dropdown change.
+// Show only the controls the chosen mode uses: cooldown in Normal, "shuffle
+// every" in the shuffle presets, and the Customize button (not the generic
+// Apply) in Custom — which is driven by the modal below.
 function updateShuffleVisibility() {
   const ms = $("admin-mode");
   if (!ms) return;
-  const normal = ms.value === "normal";
-  const sh = $("admin-shuffle-wrap"); if (sh) sh.classList.toggle("hidden", normal);
-  const cd = $("admin-cooldown-wrap"); if (cd) cd.classList.toggle("hidden", !normal);
+  const m = ms.value;
+  $("admin-shuffle-wrap").classList.toggle("hidden", m === "normal" || m === "custom");
+  $("admin-cooldown-wrap").classList.toggle("hidden", m !== "normal");
+  $("admin-custom-open").classList.toggle("hidden", m !== "custom");
+  $("admin-mode-apply").classList.toggle("hidden", m === "custom");
 }
-$("admin-mode").addEventListener("change", updateShuffleVisibility);
+$("admin-mode").addEventListener("change", () => {
+  updateShuffleVisibility();
+  if ($("admin-mode").value === "custom") openRulesModal();   // jump straight into the editor
+});
+
+// ── Custom ruleset modal ────────────────────────────────────────────────
+const RULE_DEFAULTS = {
+  claiming: true, require_found_to_claim: true, open_season_scope: "owned",
+  steal_cooldown_s: 5, cooldown_scope: "item", steal_back_lock_s: 0, steal_budget_per_min: 0,
+  hold_limit_s: 0, hold_expiry: "next_finder", tenure_lock_s: 0, idle_release_s: 0,
+  borrow_s: 0, borrow_revert: "prev_owner",
+  auto_shuffle_s: 0, shuffle_scope: "all", shared_discovery: false,
+};
+const RULE_PRESETS = {
+  normal: {},
+  hot_potato: { claiming: false, hold_limit_s: 120, hold_expiry: "next_finder" },
+  chaos: { claiming: false, auto_shuffle_s: 120, shuffle_scope: "all" },
+  cutthroat: { require_found_to_claim: false, open_season_scope: "owned", cooldown_scope: "thief",
+               steal_cooldown_s: 20, steal_budget_per_min: 3, steal_back_lock_s: 30 },
+  lease: { claiming: true, hold_limit_s: 300, hold_expiry: "release" },
+  raid: { require_found_to_claim: false, borrow_s: 120, borrow_revert: "prev_owner" },
+  siege: { claiming: true, tenure_lock_s: 240 },
+};
+function rulesFromForm() {
+  return {
+    claiming: $("r-claiming").checked, require_found_to_claim: $("r-found").checked,
+    open_season_scope: $("r-openseason").value,
+    steal_cooldown_s: Number($("r-cd").value) || 0, cooldown_scope: $("r-cdscope").value,
+    steal_back_lock_s: Number($("r-sbl").value) || 0, steal_budget_per_min: Number($("r-budget").value) || 0,
+    hold_limit_s: Number($("r-hold").value) || 0, hold_expiry: $("r-holdexp").value,
+    tenure_lock_s: Number($("r-tenure").value) || 0, idle_release_s: Number($("r-idle").value) || 0,
+    borrow_s: Number($("r-borrow").value) || 0, borrow_revert: $("r-borrowrev").value,
+    auto_shuffle_s: Number($("r-shuffle").value) || 0, shuffle_scope: $("r-shufscope").value,
+    shared_discovery: $("r-shared").checked,
+  };
+}
+function rulesToForm(r) {
+  r = Object.assign({}, RULE_DEFAULTS, r || {});
+  $("r-claiming").checked = !!r.claiming; $("r-found").checked = !!r.require_found_to_claim;
+  $("r-openseason").value = r.open_season_scope;
+  $("r-cd").value = Math.round(r.steal_cooldown_s); $("r-cdscope").value = r.cooldown_scope;
+  $("r-sbl").value = Math.round(r.steal_back_lock_s); $("r-budget").value = Math.round(r.steal_budget_per_min);
+  $("r-hold").value = Math.round(r.hold_limit_s); $("r-holdexp").value = r.hold_expiry;
+  $("r-tenure").value = Math.round(r.tenure_lock_s); $("r-idle").value = Math.round(r.idle_release_s);
+  $("r-borrow").value = Math.round(r.borrow_s); $("r-borrowrev").value = r.borrow_revert;
+  $("r-shuffle").value = Math.round(r.auto_shuffle_s); $("r-shufscope").value = r.shuffle_scope;
+  $("r-shared").checked = !!r.shared_discovery;
+  refreshRulesUI();
+}
+function summarizeRules(r) {
+  const p = [];
+  if (r.claiming) {
+    p.push(r.require_found_to_claim ? "claim found items"
+      : (r.open_season_scope === "owned" ? "steal anything someone owns" : "claim anything"));
+    if (r.steal_cooldown_s && r.cooldown_scope !== "none") p.push(`${Math.round(r.steal_cooldown_s)}s ${r.cooldown_scope} cooldown`);
+    if (r.steal_back_lock_s) p.push(`${Math.round(r.steal_back_lock_s)}s steal-back lock`);
+    if (r.steal_budget_per_min) p.push(`max ${Math.round(r.steal_budget_per_min)} steals/min`);
+  } else p.push("no manual claiming");
+  if (r.hold_limit_s) {
+    const ex = { next_finder: "→ next finder", release: "→ released", return_finder: "→ first finder" }[r.hold_expiry] || "";
+    p.push(`hold ${Math.round(r.hold_limit_s)}s ${ex}`.trim());
+  }
+  if (r.tenure_lock_s) p.push(`unstealable after ${Math.round(r.tenure_lock_s)}s`);
+  if (r.idle_release_s) p.push(`drop items when offline ${Math.round(r.idle_release_s)}s`);
+  if (!r.require_found_to_claim && r.borrow_s)
+    p.push(`borrows revert ${r.borrow_revert === "prev_owner" ? "to owner" : "to pool"} after ${Math.round(r.borrow_s)}s`);
+  if (r.auto_shuffle_s) p.push(`reshuffle ${r.shuffle_scope} every ${Math.round(r.auto_shuffle_s)}s`);
+  if (r.shared_discovery) p.push("shared discovery");
+  return p.join(" · ");
+}
+function refreshRulesUI() {
+  const r = rulesFromForm();
+  $("r-openseason-wrap").classList.toggle("hidden", r.require_found_to_claim || !r.claiming);
+  $("r-holdexp-wrap").classList.toggle("hidden", !r.hold_limit_s);
+  $("r-raid-wrap").classList.toggle("hidden", r.require_found_to_claim);
+  $("r-borrowrev-wrap").classList.toggle("hidden", !r.borrow_s);
+  $("r-shufscope-wrap").classList.toggle("hidden", !r.auto_shuffle_s);
+  $("rules-summary").textContent = summarizeRules(r) || "—";
+}
+function openRulesModal() {
+  rulesToForm(state.rules || RULE_DEFAULTS);
+  $("rules-modal").classList.remove("hidden");
+}
+function closeRulesModal() { $("rules-modal").classList.add("hidden"); }
+$("rules-modal").addEventListener("input", refreshRulesUI);
+$("rules-modal").addEventListener("change", refreshRulesUI);
+document.querySelectorAll("#rules-modal [data-preset]").forEach((b) => {
+  b.onclick = () => rulesToForm(Object.assign({}, RULE_DEFAULTS, RULE_PRESETS[b.dataset.preset] || {}));
+});
+$("admin-custom-open").onclick = openRulesModal;
+$("rules-cancel").onclick = closeRulesModal;
+$("rules-apply").onclick = () => { sendWS({ type: "admin_set_rules", rules: rulesFromForm() }); closeRulesModal(); };
+$("rules-modal").addEventListener("click", (e) => { if (e.target.id === "rules-modal") closeRulesModal(); });
 
 // Collapsible host controls (mirrors the desktop app); remembers your choice.
 function applyHostCollapse() {
