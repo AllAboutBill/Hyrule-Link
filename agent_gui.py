@@ -1567,15 +1567,40 @@ class App(tk.Tk):
             command=lambda: self._ui_send(
                 {"type": "admin_set_owner", "item": key, "player_id": None}))
         if players:
+            # "Found by…" sets the discovered tier WITHOUT granting it (no item
+            # appears in their game). For a progressive item the found tier is the
+            # tier they'd get when they claim it, so multi-tier items expose the
+            # tier list here too; single-tier items stay a plain found/un-found toggle.
+            disc_levels = it.get("discovered_levels", {})
             sub = menu()
             for p in players:
                 pid = p["id"]
-                mark = "✓ " if pid in discovered else "    "
-                sub.add_command(
-                    label=f"{mark}{p['name']}",
-                    command=lambda _pid=pid, _was=(pid in discovered): self._ui_send(
-                        {"type": "admin_set_discovered", "item": key,
-                         "player_id": _pid, "found": not _was}))
+                has = pid in discovered
+                if tiered:
+                    fsub = menu()
+                    cur = disc_levels.get(str(pid))
+                    fsub.add_command(
+                        label=("● " if not has else "    ") + "(not found)",
+                        command=lambda _pid=pid: self._ui_send(
+                            {"type": "admin_set_discovered", "item": key,
+                             "player_id": _pid, "found": False}))
+                    fsub.add_separator()
+                    for lvl in range(defn.present, defn.cap + 1):
+                        tname = (defn.tiers[lvl] if 0 <= lvl < len(defn.tiers)
+                                 else f"level {lvl}")
+                        mark = "● " if (has and cur == lvl) else "    "
+                        fsub.add_command(
+                            label=f"{mark}{tname}",
+                            command=lambda _pid=pid, _lvl=lvl: self._ui_send(
+                                {"type": "admin_set_discovered", "item": key,
+                                 "player_id": _pid, "found": True, "level": _lvl}))
+                    sub.add_cascade(label=f"{'✓ ' if has else '    '}{p['name']}", menu=fsub)
+                else:
+                    sub.add_command(
+                        label=f"{'✓ ' if has else '    '}{p['name']}",
+                        command=lambda _pid=pid, _was=has: self._ui_send(
+                            {"type": "admin_set_discovered", "item": key,
+                             "player_id": _pid, "found": not _was}))
             m.add_cascade(label="Found by…", menu=sub)
         try:
             m.tk_popup(event.x_root, event.y_root)

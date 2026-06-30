@@ -525,6 +525,7 @@ class RoomHub:
                 "tier": tier_label(item, level) if owned else "—",
                 "image": item_image(key, level),
                 "discovered": sorted(it.discovered),
+                "discovered_levels": {str(u): lv for u, lv in it.discovered.items()},
                 # per-item cooldown only gates when the scope IS the item
                 "cooldown_remaining": (max(0.0, it.cooldown_until - now)
                                        if R.get("cooldown_scope") == "item" else 0.0),
@@ -646,16 +647,26 @@ class RoomHub:
         await self.broadcast_event(code, f"Host removed {name}")
         await self.broadcast_state(code)
 
-    async def admin_set_discovered(self, code: str, player_id: int, key: str, found: bool):
+    async def admin_set_discovered(self, code: str, player_id: int, key: str, found: bool,
+                                   level=None):
+        """Mark an item found/un-found for a player WITHOUT changing ownership.
+
+        `level` (optional, multi-tier items) records the tier they've "found" — for
+        a progressive item that's the tier they'd get when they claim it — so the
+        host can grant e.g. "found Gold Sword" without putting the sword in their
+        game. No GRANT is sent; this only touches the discovered tier."""
         room = self.rooms[code]
         item = BY_KEY.get(key)
         if not item or player_id not in room.names:
             return
         it = room.items.setdefault(key, ItemState())
         if found:
-            # Host-marked discovery counts as the base ("present") tier; an actual
-            # in-world pickup later raises it to that player's real tier.
-            it.discovered.setdefault(player_id, item.present)
+            if level is not None:
+                it.discovered[player_id] = max(item.present, min(int(level), item.cap))
+            else:
+                # Host-marked discovery counts as the base ("present") tier; an actual
+                # in-world pickup later raises it to that player's real tier.
+                it.discovered.setdefault(player_id, item.present)
         else:
             it.discovered.pop(player_id, None)
             db.remove_discovered(code, key, player_id)
@@ -665,7 +676,12 @@ class RoomHub:
                 if ws:
                     await self._send(ws, {"type": P.REVOKE, "item": key})
         self._persist(room, key)
-        verb = "found" if found else "un-found"
+        if not found:
+            verb = "un-found"
+        elif level is not None and item.cap > 1:
+            verb = f"found at {tier_label(item, it.discovered[player_id])}"
+        else:
+            verb = "found"
         await self.broadcast_event(
             code, f"Host marked {item.name} {verb} for {room.names.get(player_id)}")
         await self.broadcast_state(code)

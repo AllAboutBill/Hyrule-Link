@@ -103,6 +103,23 @@ class LedgerTests(unittest.TestCase):
                   if m.get("type") == P.GRANT and m.get("item") == "sword"]
         self.assertEqual(grants[-1]["level"], 4)
 
+    def test_admin_set_discovered_with_level_marks_tier_without_granting(self):
+        hub = RoomHub()
+        room = self.room()
+        hub.rooms[room.code] = room
+        agent = FakeWebSocket()
+        hub.agents[room.code] = {1: agent}
+        # Mark player 1 as having FOUND a Gold Sword (tier 4) — but don't give it.
+        asyncio.run(hub.admin_set_discovered(room.code, 1, "sword", True, level=4))
+        it = room.items["sword"]
+        self.assertEqual(it.discovered[1], 4)   # found at gold
+        self.assertIsNone(it.owner)             # nobody owns it
+        self.assertEqual([m for m in agent.messages if m.get("type") == P.GRANT], [])
+        # …and if they later claim it, they get gold (their found tier).
+        eff = resolve_claim(room, 1, "sword")
+        self.assertIsNone(eff.reject)
+        self.assertEqual(room.items["sword"].level, 4)
+
     def test_admin_set_owner_clamps_level_to_item_cap(self):
         hub = RoomHub()
         room = self.room()

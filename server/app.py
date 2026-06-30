@@ -468,8 +468,10 @@ async def _serve_ui(ws, code, user_id, is_admin=False):
             elif mtype == P.ADMIN_REMOVE_PLAYER:
                 await hub.admin_remove_player(code, int(msg.get("player_id")))
             elif mtype == P.ADMIN_SET_DISCOVERED:
+                lvl = msg.get("level")
                 await hub.admin_set_discovered(
-                    code, int(msg.get("player_id")), msg.get("item"), bool(msg.get("found")))
+                    code, int(msg.get("player_id")), msg.get("item"), bool(msg.get("found")),
+                    level=int(lvl) if lvl is not None else None)
             elif mtype == P.ADMIN_SET_OWNER:
                 pid = msg.get("player_id")
                 lvl = msg.get("level")
