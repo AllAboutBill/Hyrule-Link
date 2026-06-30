@@ -68,6 +68,11 @@ BOW_HAS_MASK = 0x80       # bit 7: a bow is present
 BOW_SILVER_MASK = 0x40    # bit 6: silver upgrade
 BOW_EQUIP_ADDR = 0xF340   # BowEquipment — equipped-arrows byte, HUD only
 
+# InventoryTracking ($7EF38C) — the ownership bitfield for the shared-slot items
+# (boomerangs, mushroom/powder, shovel/flute), the sibling of BowTracking. The
+# per-slot equipment bytes are enums; ownership lives here. See item_effects.
+INV_TRACK_ADDR = 0xF38C
+
 # WRAM offsets are the ALTTPR SRAM-mirror addresses (see memory_constants.py).
 ITEMS: List[Item] = [
     # ── progressive equipment ────────────────────────────────────────────
@@ -105,17 +110,25 @@ ITEMS: List[Item] = [
     Item("flippers",   "Flippers",        0xF356, "simple"),
     Item("moon_pearl", "Moon Pearl",      0xF357, "simple"),
 
-    # ── shared-byte bitfield items ───────────────────────────────────────
-    Item("blue_boomerang", "Blue Boomerang", 0xF341, "bitfield", mask=0x01,
+    # ── shared-slot items (dual representation, like the bow) ─────────────
+    # Ownership is a true bitfield in InventoryTracking ($7EF38C); the per-slot
+    # bytes ($7EF341 boomerang, $7EF344 mushroom/powder, $7EF34C shovel/flute) are
+    # ENUMS the menu cycles (1/2/3), NOT bitfields — OR-ing them corrupts the enum
+    # (e.g. shovel|flute = 3 = "active flute", erasing the shovel; mushroom|powder
+    # = 3 is invalid and shows neither). So we own them via $7EF38C bits and keep
+    # the enum slot in sync in item_effects. Bits verified vs z3randomizer
+    # newitems.asm: blue=0x80, red=0x40, mushroom=0x20, powder=0x10, shovel=0x04,
+    # flute=0x01 active / 0x02 inactive (mask 0x03 = "have a flute").
+    Item("blue_boomerang", "Blue Boomerang", INV_TRACK_ADDR, "bitfield", mask=0x80,
          effect_key="blue_boomerang"),
-    Item("red_boomerang",  "Red Boomerang",  0xF341, "bitfield", mask=0x02,
+    Item("red_boomerang",  "Red Boomerang",  INV_TRACK_ADDR, "bitfield", mask=0x40,
          effect_key="red_boomerang"),
-    Item("mushroom", "Mushroom", 0xF344, "bitfield", mask=0x01,
+    Item("mushroom", "Mushroom", INV_TRACK_ADDR, "bitfield", mask=0x20,
          effect_key="mushroom"),
-    Item("powder",   "Magic Powder", 0xF344, "bitfield", mask=0x02,
+    Item("powder",   "Magic Powder", INV_TRACK_ADDR, "bitfield", mask=0x10,
          effect_key="powder"),
-    Item("shovel", "Shovel", 0xF34C, "bitfield", mask=0x01, effect_key="shovel"),
-    Item("flute",  "Flute",  0xF34C, "bitfield", mask=0x02, effect_key="flute"),
+    Item("shovel", "Shovel", INV_TRACK_ADDR, "bitfield", mask=0x04, effect_key="shovel"),
+    Item("flute",  "Flute",  INV_TRACK_ADDR, "bitfield", mask=0x03, effect_key="flute"),
     # Bottles are intentionally NOT pooled: they behave like consumables
     # (rupees/bombs/arrows), so sharing one bottle token was broken and pointless.
 ]

@@ -20,11 +20,15 @@ class Effects:
         self.t = transport
         self.mgr = ItemManager(transport, item_addresses=ITEM_ADDRESSES)
 
-    def _read(self, addr) -> int:
-        d = self.t.read_memory(addr, size=1)
-        if not d or len(d) < 1:
-            raise IOError(f"could not read WRAM ${addr:04X}")
-        return int(d[0])
+    def _read(self, addr, tries=6) -> int:
+        # Retry transient drops (NWA drops the reply to a read right after a
+        # write); raise if truly unreadable so a grant aborts instead of writing
+        # a value derived from a bad read.
+        for _ in range(tries):
+            d = self.t.read_memory(addr, size=1)
+            if d and len(d) >= 1:
+                return int(d[0])
+        raise IOError(f"could not read WRAM ${addr:04X}")
 
     @staticmethod
     def _matches(item, raw: int, level: int, enable: bool) -> bool:

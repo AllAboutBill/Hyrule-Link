@@ -36,15 +36,29 @@ these constants are the thing to verify against a live game.
 import logging
 
 from shared.items import (
-    BOW_FLAGS_ADDR, BOW_HAS_MASK, BOW_SILVER_MASK, BOW_EQUIP_ADDR,
+    BOW_FLAGS_ADDR, BOW_HAS_MASK, BOW_SILVER_MASK, BOW_EQUIP_ADDR, INV_TRACK_ADDR,
 )
 
 logger = logging.getLogger("ItemEffects")
 
-# Bitfield slot addresses (ALttPR)
-BOOMERANG_ADDR = 0xF341   # bit0 = blue, bit1 = red
-MUSHROOM_ADDR = 0xF344    # bit0 = mushroom, bit1 = powder
-SHOVEL_FLUTE_ADDR = 0xF34C  # 1 = shovel, 2 = flute, 3 = flute (activated)
+# Shared-slot items (boomerangs, mushroom/powder, shovel/flute). Ownership is a
+# bitfield in InventoryTracking ($7EF38C); the per-slot byte is an enum the menu
+# cycles. Bits + enum values verified against z3randomizer newitems.asm /
+# inventory.asm / itemdatatables.asm — do NOT OR the enum bytes (that corrupts
+# them; see shared.items).
+BOOM_BLUE_BIT = 0x80
+BOOM_RED_BIT = 0x40
+MUSHROOM_BITS = 0x28       # receive ORs 0x20|0x08; ownership/menu gate is 0x20
+MUSHROOM_OWN = 0x20
+POWDER_BIT = 0x10
+SHOVEL_BIT = 0x04
+FLUTE_ACTIVE_BIT = 0x01
+FLUTE_INACTIVE_BIT = 0x02
+FLUTE_ANY_BITS = 0x03
+
+BOOM_EQUIP_ADDR = 0xF341    # enum: 1 = blue, 2 = red
+POWDER_EQUIP_ADDR = 0xF344  # enum: 1 = mushroom, 2 = powder
+FLUTE_EQUIP_ADDR = 0xF34C   # enum: 1 = shovel, 2 = inactive flute, 3 = active flute
 
 # Boots + dash ability
 BOOTS_ADDR = 0xF355
@@ -57,9 +71,6 @@ RUN_ABILITY_MASK = 0x04
 ARROWS_ADDR = 0xF377
 DEFAULT_ARROWS = 30
 
-# Y-button selected-item index
-SELECTED_INDEX_ADDR = 0xF33F
-
 # Progressive equipment: address -> max level. (The bow is NOT a plain counter —
 # its wood/silver state is a bitfield in $7EF38E; see set_bow().)
 PROGRESSIVE = {
@@ -68,14 +79,6 @@ PROGRESSIVE = {
     "armor": (0xF35B, 2),   # 0 green .. 2 red
     "gloves": (0xF354, 2),  # 0 none .. 2 titan
 }
-
-# Menu selection codes for the Y-selectable shared-slot items (ALttPR).
-SEL_BLUE_BOOM = 0x08
-SEL_RED_BOOM = 0x09
-SEL_MUSHROOM = 0x0A
-SEL_POWDER = 0x0B
-SEL_SHOVEL = 0x0D
-SEL_FLUTE = 0x0E
 
 
 class ItemManager:
@@ -89,60 +92,94 @@ class ItemManager:
         self.item_addresses = item_addresses or {}
 
     # ── small helpers ───────────────────────────────────────────────────
-    def _read(self, addr):
-        data = self.t.read_memory(addr, size=1)
-        return int(data[0]) if data and len(data) >= 1 else 0
+    def _read(self, addr, tries=6):
+        """Read one byte, retrying transient drops. NEVER fall back to 0.
 
-    def _set_slot(self, addr, value, selected_index=None):
-        ok = self.t.write_memory(addr, bytes([value & 0xFF]))
-        if ok and selected_index is not None:
-            self.t.write_memory(SELECTED_INDEX_ADDR, bytes([selected_index]))
-        return ok
+        A dropped read returning 0 is catastrophic in a read-modify-write: it
+        clobbers every other bit of a shared byte (ability flags $7EF379,
+        InventoryTracking $7EF38C, BowTracking $7EF38E). NWA in particular drops
+        the reply to a read issued right after a write, so we retry; if the byte
+        is genuinely unreadable we raise and let the grant abort (and be retried)
+        rather than corrupt the save."""
+        for _ in range(tries):
+            data = self.t.read_memory(addr, size=1)
+            if data and len(data) >= 1:
+                return int(data[0])
+        raise IOError(f"[ItemEffects] could not read WRAM ${addr:04X}")
 
-    # ── shared bitfield slots ───────────────────────────────────────────
+    def _track_set(self, bits):
+        self.t.write_memory(INV_TRACK_ADDR,
+                            bytes([(self._read(INV_TRACK_ADDR) | bits) & 0xFF]))
+
+    def _track_clear(self, bits):
+        self.t.write_memory(INV_TRACK_ADDR,
+                            bytes([self._read(INV_TRACK_ADDR) & ~bits & 0xFF]))
+
+    # ── shared-slot items: own via $7EF38C bits, equip via the enum slot ──
+    # Granting sets the ownership bit AND equips the item (so it shows/works).
+    # Revoking clears the bit AND, if that item was equipped, falls back to the
+    # other item still owned in the slot (or empties it) — never OR-ing the enum.
     def _add_boomerang(self, blue=False, red=False):
-        cur = self._read(BOOMERANG_ADDR)
-        new = cur | (0x01 if blue else 0) | (0x02 if red else 0)
-        sel = SEL_BLUE_BOOM if (blue or new & 0x01) else SEL_RED_BOOM
-        return self._set_slot(BOOMERANG_ADDR, new, sel)
+        if blue:
+            self._track_set(BOOM_BLUE_BIT)
+            self.t.write_memory(BOOM_EQUIP_ADDR, bytes([0x01]))
+        if red:
+            self._track_set(BOOM_RED_BIT)
+            self.t.write_memory(BOOM_EQUIP_ADDR, bytes([0x02]))
+        return True
 
     def _remove_boomerang(self, blue=False, red=False):
-        cur = self._read(BOOMERANG_ADDR)
-        new = cur & ~((0x01 if blue else 0) | (0x02 if red else 0))
-        sel = SEL_BLUE_BOOM if new & 0x01 else (SEL_RED_BOOM if new & 0x02 else None)
-        return self._set_slot(BOOMERANG_ADDR, new, sel)
+        self._track_clear((BOOM_BLUE_BIT if blue else 0) | (BOOM_RED_BIT if red else 0))
+        track = self._read(INV_TRACK_ADDR)
+        equip = self._read(BOOM_EQUIP_ADDR)
+        if blue and equip == 0x01:
+            self.t.write_memory(BOOM_EQUIP_ADDR, bytes([0x02 if track & BOOM_RED_BIT else 0x00]))
+        if red and equip == 0x02:
+            self.t.write_memory(BOOM_EQUIP_ADDR, bytes([0x01 if track & BOOM_BLUE_BIT else 0x00]))
+        return True
 
     def _add_mushroom_powder(self, mushroom=False, powder=False):
-        cur = self._read(MUSHROOM_ADDR)
-        new = cur | (0x01 if mushroom else 0) | (0x02 if powder else 0)
-        sel = SEL_MUSHROOM if (mushroom or new & 0x01) else SEL_POWDER
-        return self._set_slot(MUSHROOM_ADDR, new, sel)
+        if mushroom:
+            self._track_set(MUSHROOM_BITS)
+            self.t.write_memory(POWDER_EQUIP_ADDR, bytes([0x01]))
+        if powder:
+            self._track_set(POWDER_BIT)
+            self.t.write_memory(POWDER_EQUIP_ADDR, bytes([0x02]))
+        return True
 
     def _remove_mushroom_powder(self, mushroom=False, powder=False):
-        cur = self._read(MUSHROOM_ADDR)
-        new = cur & ~((0x01 if mushroom else 0) | (0x02 if powder else 0))
-        sel = SEL_MUSHROOM if new & 0x01 else (SEL_POWDER if new & 0x02 else None)
-        return self._set_slot(MUSHROOM_ADDR, new, sel)
+        self._track_clear((MUSHROOM_BITS if mushroom else 0) | (POWDER_BIT if powder else 0))
+        track = self._read(INV_TRACK_ADDR)
+        equip = self._read(POWDER_EQUIP_ADDR)
+        if mushroom and equip == 0x01:
+            self.t.write_memory(POWDER_EQUIP_ADDR, bytes([0x02 if track & POWDER_BIT else 0x00]))
+        if powder and equip == 0x02:
+            self.t.write_memory(POWDER_EQUIP_ADDR, bytes([0x01 if track & MUSHROOM_OWN else 0x00]))
+        return True
 
     def _add_shovel_flute(self, shovel=False, flute=False):
-        cur = self._read(SHOVEL_FLUTE_ADDR)
-        new = cur
         if shovel:
-            new |= 0x01
+            self._track_set(SHOVEL_BIT)
+            self.t.write_memory(FLUTE_EQUIP_ADDR, bytes([0x01]))
         if flute:
-            new |= 0x02          # flute present (inactive); 0x03 = activated
-        sel = SEL_FLUTE if (flute or new & 0x02) else SEL_SHOVEL
-        return self._set_slot(SHOVEL_FLUTE_ADDR, new, sel)
+            self._track_set(FLUTE_ACTIVE_BIT)          # grant the working (active) flute
+            self.t.write_memory(FLUTE_EQUIP_ADDR, bytes([0x03]))
+        return True
 
     def _remove_shovel_flute(self, shovel=False, flute=False):
-        cur = self._read(SHOVEL_FLUTE_ADDR)
-        new = cur
-        if shovel:
-            new &= ~0x01
-        if flute:
-            new &= ~0x03          # clear flute + activated bit
-        sel = SEL_SHOVEL if new & 0x01 else (SEL_FLUTE if new & 0x02 else None)
-        return self._set_slot(SHOVEL_FLUTE_ADDR, new, sel)
+        self._track_clear((SHOVEL_BIT if shovel else 0) | (FLUTE_ANY_BITS if flute else 0))
+        track = self._read(INV_TRACK_ADDR)
+        equip = self._read(FLUTE_EQUIP_ADDR)
+        if shovel and equip == 0x01:
+            if track & FLUTE_ACTIVE_BIT:
+                self.t.write_memory(FLUTE_EQUIP_ADDR, bytes([0x03]))
+            elif track & FLUTE_INACTIVE_BIT:
+                self.t.write_memory(FLUTE_EQUIP_ADDR, bytes([0x02]))
+            else:
+                self.t.write_memory(FLUTE_EQUIP_ADDR, bytes([0x00]))
+        if flute and equip in (0x02, 0x03):
+            self.t.write_memory(FLUTE_EQUIP_ADDR, bytes([0x01 if track & SHOVEL_BIT else 0x00]))
+        return True
 
     # ── boots (+ run ability) ───────────────────────────────────────────
     def _add_boots(self):
@@ -263,11 +300,14 @@ class ItemManager:
             snap[BOOTS_ADDR] = self._read(BOOTS_ADDR)
             snap[ABILITY_ADDR] = self._read(ABILITY_ADDR)
         elif item_key in ("boomerang", "blue_boomerang", "red_boomerang"):
-            snap[BOOMERANG_ADDR] = self._read(BOOMERANG_ADDR)
+            snap[INV_TRACK_ADDR] = self._read(INV_TRACK_ADDR)
+            snap[BOOM_EQUIP_ADDR] = self._read(BOOM_EQUIP_ADDR)
         elif item_key in ("mushroom", "powder"):
-            snap[MUSHROOM_ADDR] = self._read(MUSHROOM_ADDR)
+            snap[INV_TRACK_ADDR] = self._read(INV_TRACK_ADDR)
+            snap[POWDER_EQUIP_ADDR] = self._read(POWDER_EQUIP_ADDR)
         elif item_key in ("shovel", "flute"):
-            snap[SHOVEL_FLUTE_ADDR] = self._read(SHOVEL_FLUTE_ADDR)
+            snap[INV_TRACK_ADDR] = self._read(INV_TRACK_ADDR)
+            snap[FLUTE_EQUIP_ADDR] = self._read(FLUTE_EQUIP_ADDR)
         elif item_key in ("bow", "silver_arrows"):
             snap[BOW_FLAGS_ADDR] = self._read(BOW_FLAGS_ADDR)
             snap[BOW_EQUIP_ADDR] = self._read(BOW_EQUIP_ADDR)
