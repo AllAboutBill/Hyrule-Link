@@ -472,8 +472,10 @@ async def _serve_ui(ws, code, user_id, is_admin=False):
                     code, int(msg.get("player_id")), msg.get("item"), bool(msg.get("found")))
             elif mtype == P.ADMIN_SET_OWNER:
                 pid = msg.get("player_id")
+                lvl = msg.get("level")
                 await hub.admin_set_owner(
-                    code, int(pid) if pid is not None else None, msg.get("item"))
+                    code, int(pid) if pid is not None else None, msg.get("item"),
+                    level=int(lvl) if lvl is not None else None)
             elif mtype == P.ADMIN_SET_MODE:
                 await hub.admin_set_mode(code, msg.get("mode", "normal"), msg.get("seconds"))
             elif mtype == P.ADMIN_SET_NAME:

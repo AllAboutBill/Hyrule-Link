@@ -1521,6 +1521,12 @@ class App(tk.Tk):
         discovered = set(it.get("discovered", []))
         players = (self.state or {}).get("players", [])
         host_id = (self.state or {}).get("host")
+        cur_level = it.get("level")
+        defn = BY_KEY.get(key)
+        # Multi-tier items (sword/shield/mail/gloves/magic/bow) let the host pick
+        # the tier, so they can restore e.g. a Gold Sword after a reset/disconnect
+        # wiped the ledger's memory of what the player had found.
+        tiered = bool(defn and defn.cap > 1)
 
         def menu():
             return tk.Menu(self, tearoff=0, bg=PANEL, fg=INK, bd=0,
@@ -1534,13 +1540,26 @@ class App(tk.Tk):
             m.add_command(label="No players in the room yet", state="disabled")
         for p in players:
             pid = p["id"]
-            held = "  ●" if pid == owner else ""
             star = "★ " if pid == host_id else ""
-            m.add_command(
-                label=f"Give to {star}{p['name']}{held}",
-                state=("disabled" if pid == owner else "normal"),
-                command=lambda _pid=pid: self._ui_send(
-                    {"type": "admin_set_owner", "item": key, "player_id": _pid}))
+            if tiered:
+                tsub = menu()
+                for lvl in range(defn.present, defn.cap + 1):
+                    tname = (defn.tiers[lvl] if 0 <= lvl < len(defn.tiers)
+                             else f"level {lvl}")
+                    mark = "● " if (pid == owner and cur_level == lvl) else "    "
+                    tsub.add_command(
+                        label=f"{mark}{tname}",
+                        command=lambda _pid=pid, _lvl=lvl: self._ui_send(
+                            {"type": "admin_set_owner", "item": key,
+                             "player_id": _pid, "level": _lvl}))
+                m.add_cascade(label=f"Give to {star}{p['name']}", menu=tsub)
+            else:
+                held = "  ●" if pid == owner else ""
+                m.add_command(
+                    label=f"Give to {star}{p['name']}{held}",
+                    state=("disabled" if pid == owner else "normal"),
+                    command=lambda _pid=pid: self._ui_send(
+                        {"type": "admin_set_owner", "item": key, "player_id": _pid}))
         m.add_separator()
         m.add_command(
             label="Take away (nobody holds it)",

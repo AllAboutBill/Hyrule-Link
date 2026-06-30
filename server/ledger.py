@@ -670,8 +670,13 @@ class RoomHub:
             code, f"Host marked {item.name} {verb} for {room.names.get(player_id)}")
         await self.broadcast_state(code)
 
-    async def admin_set_owner(self, code: str, player_id, key: str):
-        """Force an item's owner (player_id) or clear it (player_id None)."""
+    async def admin_set_owner(self, code: str, player_id, key: str, level=None):
+        """Force an item's owner (player_id) or clear it (player_id None).
+
+        `level` (optional) sets an explicit tier for a multi-tier item — the host
+        uses it to restore e.g. a Gold Sword after a reset wiped the ledger's
+        memory of what the player had found. Without it, the player gets back
+        whatever tier they'd previously discovered."""
         room = self.rooms[code]
         item = BY_KEY.get(key)
         if not item or (player_id is not None and player_id not in room.names):
@@ -679,9 +684,12 @@ class RoomHub:
         it = room.items.setdefault(key, ItemState())
         prev = it.owner
         if player_id is not None:
-            it.discovered.setdefault(player_id, item.present)  # owning implies discovered
+            if level is not None:
+                it.discovered[player_id] = max(item.present, min(int(level), item.cap))
+            else:
+                it.discovered.setdefault(player_id, item.present)  # owning implies discovered
             it.owner = player_id
-            it.level = it.discovered[player_id]   # grant their own tier
+            it.level = it.discovered[player_id]   # grant the chosen / their own tier
             it.held_since = time.time()
             ws = self.agents.get(code, {}).get(player_id)
             if ws:

@@ -2,6 +2,7 @@ import asyncio
 import math
 import unittest
 
+from server import db
 from server.ledger import (
     RoomHub, RoomState, clamp_rules, ownership_commands, preset_rules, resolve_claim,
     resolve_pickup,
@@ -19,6 +20,15 @@ class FakeWebSocket:
 
 
 class LedgerTests(unittest.TestCase):
+    def setUp(self):
+        self._old_path, self._old_conn = db.DB_PATH, db._conn
+        db.DB_PATH, db._conn = ":memory:", None
+        db.init()
+
+    def tearDown(self):
+        db._conn.close()
+        db.DB_PATH, db._conn = self._old_path, self._old_conn
+
     def room(self):
         room = RoomState("TEST")
         room.names = {1: "A", 2: "B"}
@@ -76,6 +86,29 @@ class LedgerTests(unittest.TestCase):
         hub.rooms[room.code] = room
         asyncio.run(hub.admin_set_owner(room.code, 999, "sword"))
         self.assertNotIn("sword", room.items)
+
+    def test_admin_set_owner_with_level_restores_a_progressive_tier(self):
+        hub = RoomHub()
+        room = self.room()
+        hub.rooms[room.code] = room
+        agent = FakeWebSocket()
+        hub.agents[room.code] = {1: agent}
+        # Player 1 has discovered nothing; host hands them a Gold Sword (tier 4).
+        asyncio.run(hub.admin_set_owner(room.code, 1, "sword", level=4))
+        it = room.items["sword"]
+        self.assertEqual(it.owner, 1)
+        self.assertEqual(it.level, 4)
+        self.assertEqual(it.discovered[1], 4)          # they now "own" that tier
+        grants = [m for m in agent.messages
+                  if m.get("type") == P.GRANT and m.get("item") == "sword"]
+        self.assertEqual(grants[-1]["level"], 4)
+
+    def test_admin_set_owner_clamps_level_to_item_cap(self):
+        hub = RoomHub()
+        room = self.room()
+        hub.rooms[room.code] = room
+        asyncio.run(hub.admin_set_owner(room.code, 1, "gloves", level=99))
+        self.assertEqual(room.items["gloves"].level, 2)   # Titan's Mitt is the cap
 
     def test_transfer_notifications_are_targeted(self):
         hub = RoomHub()
