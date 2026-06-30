@@ -332,7 +332,6 @@ class App(tk.Tk):
         self._avatar_q = queue.Queue()   # worker threads -> UI thread (PIL images)
         self._avatar_version = 0    # bumped when an avatar finishes loading (board sig)
         self._board_sig = None      # signature of the last board render (skip no-op rebuilds)
-        self._manage_win = None     # host's per-item found/owner popup (if open)
 
         self._build_chrome()
         self.show_start()
@@ -1191,7 +1190,7 @@ class App(tk.Tk):
         hdr = tk.Frame(self.host_bar, bg=PANEL); hdr.pack(fill="x", padx=8, pady=5)
         self._host_toggle = self._button(hdr, "", self._toggle_host_controls, small=True)
         self._host_toggle.pack(side="left")
-        tk.Label(hdr, text="Right-click an item to manage ownership",
+        tk.Label(hdr, text="Right-click an item → give it to a player",
                  fg=MUTED, bg=PANEL, font=("Segoe UI", 8)).pack(side="right", padx=6)
 
         # the controls themselves live in a frame we can hide
@@ -1482,65 +1481,60 @@ class App(tk.Tk):
         for ch in widget.winfo_children():
             self._bind_recursive(ch, sequence, func, add=add)
 
-    def _manage_item(self, key, name):
-        """Host-only popup to fix who has 'found' an item and who owns it — mirrors
-        the web's per-item chips for when the app is the only screen open."""
+    def _item_menu(self, event, key, name):
+        """Host-only right-click menu: give the item to a player (or take it away)
+        in ONE click. "Give to X" sends admin_set_owner, which the server applies
+        in-game immediately and auto-marks discovered — so there's no separate
+        "found" step. The per-player discovery toggles live in a "Found by…"
+        submenu for the rare discovery-gated case (fixing state after a disconnect)."""
         if not self._is_host():
             return
-        win = getattr(self, "_manage_win", None)
-        if win is not None and win.winfo_exists():
-            win.destroy()
-        win = tk.Toplevel(self); win.title(f"Manage — {name}"); win.configure(bg=BG)
-        win.transient(self); win.geometry("380x430")
-        self._manage_win = win; self._manage_key = key
-        tk.Label(win, text=name, fg=GOLD, bg=BG,
-                 font=(self.logo_font, 13, "bold")).pack(anchor="w", padx=14, pady=(12, 2))
-        tk.Label(win, text="Found = they've discovered it (so they can Claim it). "
-                 "Owner = who holds it right now. Use this to fix a player's state after "
-                 "a disconnect.", fg=MUTED, bg=BG, font=("Segoe UI", 8),
-                 wraplength=350, justify="left").pack(anchor="w", padx=14, pady=(0, 8))
-        self._manage_body = tk.Frame(win, bg=BG)
-        self._manage_body.pack(fill="both", expand=True, padx=8)
-        self._button(win, "Close", win.destroy, primary=True).pack(anchor="e", padx=14, pady=10)
-        win.protocol("WM_DELETE_WINDOW", lambda: (setattr(self, "_manage_win", None), win.destroy()))
-        self._refresh_manage()
-
-    def _refresh_manage(self):
-        win = getattr(self, "_manage_win", None)
-        if win is None or not win.winfo_exists():
-            self._manage_win = None
-            return
-        body = self._manage_body
-        for w in body.winfo_children():
-            w.destroy()
-        key = self._manage_key
         it = (self.state or {}).get("ledger", {}).get(key, {})
-        discovered = set(it.get("discovered", []))
         owner = it.get("owner")
+        discovered = set(it.get("discovered", []))
         players = (self.state or {}).get("players", [])
+        host_id = (self.state or {}).get("host")
+
+        def menu():
+            return tk.Menu(self, tearoff=0, bg=PANEL, fg=INK, bd=0,
+                           activebackground=PRIMARY, activeforeground="#ffffff",
+                           font=("Segoe UI", 10))
+
+        m = menu()
+        m.add_command(label=name, state="disabled")
+        m.add_separator()
         if not players:
-            tk.Label(body, text="No players in the room yet.", fg=MUTED, bg=BG,
-                     font=("Segoe UI", 9)).pack(anchor="w", padx=8, pady=6)
+            m.add_command(label="No players in the room yet", state="disabled")
         for p in players:
-            row = tk.Frame(body, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
-            row.pack(fill="x", padx=6, pady=3)
-            var = tk.BooleanVar(value=p["id"] in discovered)
-            tk.Checkbutton(
-                row, text="found", variable=var,
-                command=lambda pid=p["id"], v=var: self._ui_send(
-                    {"type": "admin_set_discovered", "player_id": pid, "item": key, "found": v.get()}),
-                fg=INK, bg=PANEL, selectcolor=PANEL2, activebackground=PANEL,
-                activeforeground=INK, font=("Segoe UI", 9)).pack(side="left", padx=(6, 4), pady=4)
-            star = "★ " if p["id"] == self.state.get("host") else ""
-            tk.Label(row, text=f"{star}{p['name']}", fg=INK, bg=PANEL,
-                     font=("Segoe UI", 10)).pack(side="left")
-            is_owner = (owner == p["id"])
-            self._button(
-                row, "● owner" if is_owner else "make owner",
-                lambda pid=p["id"], cur=is_owner: self._ui_send(
-                    {"type": "admin_set_owner", "item": key,
-                     "player_id": (None if cur else pid)}),
-                small=True).pack(side="right", padx=6)
+            pid = p["id"]
+            held = "  ●" if pid == owner else ""
+            star = "★ " if pid == host_id else ""
+            m.add_command(
+                label=f"Give to {star}{p['name']}{held}",
+                state=("disabled" if pid == owner else "normal"),
+                command=lambda _pid=pid: self._ui_send(
+                    {"type": "admin_set_owner", "item": key, "player_id": _pid}))
+        m.add_separator()
+        m.add_command(
+            label="Take away (nobody holds it)",
+            state=("normal" if owner is not None else "disabled"),
+            command=lambda: self._ui_send(
+                {"type": "admin_set_owner", "item": key, "player_id": None}))
+        if players:
+            sub = menu()
+            for p in players:
+                pid = p["id"]
+                mark = "✓ " if pid in discovered else "    "
+                sub.add_command(
+                    label=f"{mark}{p['name']}",
+                    command=lambda _pid=pid, _was=(pid in discovered): self._ui_send(
+                        {"type": "admin_set_discovered", "item": key,
+                         "player_id": _pid, "found": not _was}))
+            m.add_cascade(label="Found by…", menu=sub)
+        try:
+            m.tk_popup(event.x_root, event.y_root)
+        finally:
+            m.grab_release()
 
     def _board_signature(self):
         """A cheap fingerprint of everything _render_board draws. Lets us skip the
@@ -1613,7 +1607,6 @@ class App(tk.Tk):
             self.board.grid_columnconfigure(c, weight=1, minsize=CARD_MIN_PX, uniform="items")
         for c in range(cols, 12):                 # clear any columns from a wider layout
             self.board.grid_columnconfigure(c, weight=0, minsize=0, uniform="")
-        self._refresh_manage()                    # keep an open host popup in sync
 
     def _board_columns(self):
         """How many item columns fit the current board width — favouring a wide,
@@ -1725,12 +1718,12 @@ class App(tk.Tk):
                        and card.configure(highlightbackground=norm))
         self._bind_recursive(card, "<Enter>", _hov_on, add="+")
         self._bind_recursive(card, "<Leave>", _hov_off, add="+")
-        # host: right-click anywhere on a card to manage found/owner per player
+        # host: right-click anywhere on a card → one-click give/take menu
         if self._is_host():
             card.configure(cursor="hand2")
             self._bind_recursive(
                 card, "<Button-3>",
-                lambda ev, k=cat["key"], n=cat["name"]: self._manage_item(k, n))
+                lambda ev, k=cat["key"], n=cat["name"]: self._item_menu(ev, k, n))
         return card
 
     def _show_emu_help(self):
