@@ -18,6 +18,9 @@ Each entry is a `Item`:
                                shared max
                  "bitfield"    one bit of a shared byte (boomerangs, etc.)
                  "boots"       like simple but also toggles the dash-ability flag
+                 "bow"         the ALTTPR BowTracking byte ($7EF38E): bit 0x80 =
+                               has bow, 0x40 = silver. Wood-vs-silver is NOT
+                               reliably in the equipped byte $7EF340.
     mask       for "bitfield": which bit of `addr` this token owns
     cap        for "progressive": highest tier
     present    for "progressive": lowest tier that counts as "discovered"
@@ -52,6 +55,19 @@ class Item:
     tiers: tuple = field(default_factory=tuple)
 
 
+# The bow is special. In ALTTPR the wood-vs-silver state lives in the "BowTracking"
+# byte $7EF38E (bit 0x80 = any bow, 0x40 = silver upgrade), confirmed against
+# z3randomizer/inventory.asm (silver arrows are gated on `BowTracking & 0xC0 ==
+# 0xC0`) and the AP/PopTracker decode (TestFlag 0x7ef38e 0x80 / 0x40). The equipped
+# byte $7EF340 ("BowEquipment") only selects which arrows fire — a plain wood bow
+# with arrows reads as 2 there, so treating $7EF340==2 as "silver" both mis-detects
+# pickups and fails to actually enable silver firing. We therefore key the bow off
+# $7EF38E and keep $7EF340 in sync only for the HUD.
+BOW_FLAGS_ADDR = 0xF38E   # BowTracking — authoritative wood/silver state
+BOW_HAS_MASK = 0x80       # bit 7: a bow is present
+BOW_SILVER_MASK = 0x40    # bit 6: silver upgrade
+BOW_EQUIP_ADDR = 0xF340   # BowEquipment — equipped-arrows byte, HUD only
+
 # WRAM offsets are the ALTTPR SRAM-mirror addresses (see memory_constants.py).
 ITEMS: List[Item] = [
     # ── progressive equipment ────────────────────────────────────────────
@@ -63,7 +79,7 @@ ITEMS: List[Item] = [
          tiers=("Green", "Blue", "Red")),
     Item("gloves", "Gloves", 0xF354, "progressive", cap=2, present=1,
          tiers=("none", "Power Glove", "Titan's Mitt")),
-    Item("bow",    "Bow",    0xF340, "progressive", cap=2, present=1,
+    Item("bow",    "Bow",    BOW_FLAGS_ADDR, "bow", cap=2, present=1,
          effect_key="bow", tiers=("none", "Bow", "Silver Bow")),
     Item("magic",  "Magic Upgrade", 0xF37B, "progressive", cap=2, present=1,
          tiers=("none", "1/2 Magic", "1/4 Magic")),
@@ -130,6 +146,10 @@ def discovered_level(item: Item, raw_byte: int) -> int:
     """
     if item.kind == "bitfield":
         return 1 if (raw_byte & item.mask) else 0
+    if item.kind == "bow":
+        if not (raw_byte & BOW_HAS_MASK):
+            return 0
+        return 2 if (raw_byte & BOW_SILVER_MASK) else 1
     if item.kind == "boots":
         return 1 if raw_byte else 0
     if item.kind == "simple":

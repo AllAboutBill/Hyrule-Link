@@ -3,6 +3,11 @@ import unittest
 
 from agent.agent import GAME_MODE_ADDR, HyruleAgent, _TRACKED_SIZE, _TRACKED_START
 from agent.sni.emu_connector import EmuConnector, READ_FAILURE_LIMIT, _RetroArchClient
+from agent.sni.item_effects import ARROWS_ADDR, DEFAULT_ARROWS
+from shared.items import (
+    BY_KEY, discovered_level,
+    BOW_FLAGS_ADDR, BOW_EQUIP_ADDR, BOW_HAS_MASK, BOW_SILVER_MASK,
+)
 
 
 class MemoryTransport:
@@ -87,6 +92,50 @@ class AgentApplyTests(unittest.TestCase):
         agent._apply("sword", 2, True)
         self.assertFalse(agent.ws.messages[-1]["ok"])
         self.assertIn("verification failed", agent.ws.messages[-1]["error"])
+
+    def test_grant_wood_bow_sets_tracking_not_silver(self):
+        transport = MemoryTransport()
+        agent = self.agent(transport)
+        agent._apply("bow", 1, True)
+        self.assertTrue(agent.ws.messages[-1]["ok"])
+        flags = transport.memory[BOW_FLAGS_ADDR]
+        self.assertTrue(flags & BOW_HAS_MASK)          # has a bow
+        self.assertFalse(flags & BOW_SILVER_MASK)      # but NOT silver
+        self.assertEqual(transport.memory[BOW_EQUIP_ADDR], 0x01)
+        self.assertEqual(discovered_level(BY_KEY["bow"], flags), 1)
+
+    def test_grant_silver_bow_sets_silver_bit_and_arrows(self):
+        transport = MemoryTransport()
+        agent = self.agent(transport)
+        agent._apply("bow", 2, True)
+        self.assertTrue(agent.ws.messages[-1]["ok"])
+        flags = transport.memory[BOW_FLAGS_ADDR]
+        # z3randomizer gates silver firing on BowTracking & 0xC0 == 0xC0
+        self.assertEqual(flags & (BOW_HAS_MASK | BOW_SILVER_MASK),
+                         BOW_HAS_MASK | BOW_SILVER_MASK)
+        self.assertEqual(transport.memory[ARROWS_ADDR], DEFAULT_ARROWS)
+        self.assertEqual(discovered_level(BY_KEY["bow"], flags), 2)
+
+    def test_revoke_bow_clears_tracking(self):
+        transport = MemoryTransport()
+        agent = self.agent(transport)
+        agent._apply("bow", 2, True)
+        agent._apply("bow", 0, False)
+        self.assertTrue(agent.ws.messages[-1]["ok"])
+        flags = transport.memory[BOW_FLAGS_ADDR]
+        self.assertFalse(flags & (BOW_HAS_MASK | BOW_SILVER_MASK))
+        self.assertEqual(discovered_level(BY_KEY["bow"], flags), 0)
+
+    def test_silver_bow_pickup_detected_from_tracking_byte(self):
+        transport = MemoryTransport()
+        transport.memory[GAME_MODE_ADDR] = 0x07
+        agent = self.agent(transport)
+        agent._poll_once()                                   # seed baseline (no bow)
+        transport.memory[BOW_FLAGS_ADDR] = BOW_HAS_MASK | BOW_SILVER_MASK
+        agent._poll_once()
+        bow_pickups = [m for m in agent.ws.messages
+                       if m.get("item") == "bow" and "level" in m]
+        self.assertEqual(bow_pickups[-1]["level"], 2)
 
     def test_server_notification_reaches_transport(self):
         transport = MemoryTransport()

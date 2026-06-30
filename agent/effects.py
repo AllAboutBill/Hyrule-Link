@@ -11,8 +11,8 @@ Every enable/disable returns the resulting raw byte at the item's address so the
 poller can echo-cancel its own write (and not re-report it as a fresh pickup).
 """
 
-from .sni.item_effects import ItemManager, ARROWS_ADDR, DEFAULT_ARROWS
-from shared.items import BY_KEY, ITEM_ADDRESSES
+from .sni.item_effects import ItemManager
+from shared.items import BY_KEY, ITEM_ADDRESSES, BOW_HAS_MASK, BOW_SILVER_MASK
 
 
 class Effects:
@@ -30,15 +30,20 @@ class Effects:
     def _matches(item, raw: int, level: int, enable: bool) -> bool:
         if item.kind == "bitfield":
             return bool(raw & item.mask) == enable
+        if item.kind == "bow":
+            has = bool(raw & BOW_HAS_MASK)
+            if not enable:
+                return not has
+            return has and (bool(raw & BOW_SILVER_MASK) == (level >= 2))
         expected = (level if item.kind == "progressive" else item.give) if enable else 0
         return raw == expected
 
     def enable(self, key: str, level: int) -> int:
         item = BY_KEY[key]
-        if item.kind == "progressive":
+        if item.kind == "bow":
+            self.mgr.set_bow(level)   # writes BowTracking ($7EF38E) + equip + arrows
+        elif item.kind == "progressive":
             self.t.write_memory(item.addr, bytes([level & 0xFF]))
-            if key == "bow" and level >= 2 and self._read(ARROWS_ADDR) == 0:
-                self.t.write_memory(ARROWS_ADDR, bytes([DEFAULT_ARROWS]))
         elif item.kind == "boots":
             self.mgr._add_boots()
         elif item.kind == "bitfield":
@@ -52,7 +57,9 @@ class Effects:
 
     def disable(self, key: str) -> int:
         item = BY_KEY[key]
-        if item.kind == "progressive":
+        if item.kind == "bow":
+            self.mgr.set_bow(0)
+        elif item.kind == "progressive":
             self.t.write_memory(item.addr, bytes([0x00]))
         elif item.kind == "boots":
             self.mgr._remove_boots()

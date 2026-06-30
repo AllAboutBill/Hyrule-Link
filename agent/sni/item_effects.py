@@ -35,6 +35,10 @@ these constants are the thing to verify against a live game.
 
 import logging
 
+from shared.items import (
+    BOW_FLAGS_ADDR, BOW_HAS_MASK, BOW_SILVER_MASK, BOW_EQUIP_ADDR,
+)
+
 logger = logging.getLogger("ItemEffects")
 
 # Bitfield slot addresses (ALttPR)
@@ -47,21 +51,22 @@ BOOTS_ADDR = 0xF355
 ABILITY_ADDR = 0xF379
 RUN_ABILITY_MASK = 0x04
 
-# Bow + arrows
-BOW_ADDR = 0xF340         # 0 = none, 1 = wooden, 2 = silver
+# Bow + arrows. Wood-vs-silver lives in the BowTracking byte ($7EF38E, imported as
+# BOW_FLAGS_ADDR), NOT the equipped byte ($7EF340 / BOW_EQUIP_ADDR) — see set_bow()
+# and shared.items for why writing $7EF340 alone never enables silver firing.
 ARROWS_ADDR = 0xF377
 DEFAULT_ARROWS = 30
 
 # Y-button selected-item index
 SELECTED_INDEX_ADDR = 0xF33F
 
-# Progressive equipment: address -> max level
+# Progressive equipment: address -> max level. (The bow is NOT a plain counter —
+# its wood/silver state is a bitfield in $7EF38E; see set_bow().)
 PROGRESSIVE = {
     "sword": (0xF359, 4),   # 0 none .. 4 gold
     "shield": (0xF35A, 3),  # 0 none .. 3 mirror
     "armor": (0xF35B, 2),   # 0 green .. 2 red
     "gloves": (0xF354, 2),  # 0 none .. 2 titan
-    "bow": (BOW_ADDR, 2),   # 0 none, 1 wooden, 2 silver
 }
 
 # Menu selection codes for the Y-selectable shared-slot items (ALttPR).
@@ -150,12 +155,33 @@ class ItemManager:
         ability = self._read(ABILITY_ADDR)
         return self.t.write_memory(ABILITY_ADDR, bytes([ability & ~RUN_ABILITY_MASK]))
 
-    # ── silver arrows ───────────────────────────────────────────────────
-    def _add_silver_arrows(self):
-        self.t.write_memory(BOW_ADDR, bytes([0x02]))
-        if self._read(ARROWS_ADDR) == 0:
+    # ── bow (BowTracking byte $7EF38E is the wood/silver source of truth) ──
+    def set_bow(self, level):
+        """Set the bow to none (0), wood (1), or silver (2), authoritatively.
+
+        ALTTPR reads wood-vs-silver from the BowTracking byte ($7EF38E): bit 0x80
+        = a bow is present, 0x40 = silver upgrade, and silver arrows only fire when
+        BOTH are set (z3randomizer gates on `BowTracking & 0xC0 == 0xC0`). The
+        equipped byte ($7EF340) just picks which arrows fire, so we keep it in sync
+        for the HUD but never rely on it. Returns the resulting BowTracking byte."""
+        flags = self._read(BOW_FLAGS_ADDR)
+        if level <= 0:
+            flags &= ~(BOW_HAS_MASK | BOW_SILVER_MASK)
+            equip = 0x00
+        else:
+            flags |= BOW_HAS_MASK
+            if level >= 2:
+                flags |= BOW_SILVER_MASK
+                equip = 0x04          # silver bow + arrows (BowEquipment)
+            else:
+                flags &= ~BOW_SILVER_MASK
+                equip = 0x01          # wood bow
+        flags &= 0xFF
+        self.t.write_memory(BOW_FLAGS_ADDR, bytes([flags]))
+        self.t.write_memory(BOW_EQUIP_ADDR, bytes([equip]))
+        if level >= 2 and self._read(ARROWS_ADDR) == 0:
             self.t.write_memory(ARROWS_ADDR, bytes([DEFAULT_ARROWS]))
-        return True
+        return self._read(BOW_FLAGS_ADDR)
 
     # ── public: add / remove ────────────────────────────────────────────
     SPECIAL = {
@@ -181,8 +207,9 @@ class ItemManager:
         """Grant an item, handling boots/shared-slots/silver-arrows correctly."""
         if item_key == "boots":
             return self._add_boots()
-        if item_key == "silver_arrows":
-            return self._add_silver_arrows()
+        if item_key in ("bow", "silver_arrows"):
+            self.set_bow(2)
+            return True
         if item_key in self.SPECIAL:
             method, kwargs = self.SPECIAL[item_key]
             return getattr(self, method)(**kwargs)
@@ -197,6 +224,9 @@ class ItemManager:
         """Remove an item, preserving the other half of shared slots."""
         if item_key == "boots":
             return self._remove_boots()
+        if item_key in ("bow", "silver_arrows"):
+            self.set_bow(0)
+            return True
         if item_key in self.SPECIAL_REMOVE:
             method, kwargs = self.SPECIAL_REMOVE[item_key]
             return getattr(self, method)(**kwargs)
@@ -219,8 +249,6 @@ class ItemManager:
         cur = self._read(addr)
         new = min(cur + 1, cap)
         self.t.write_memory(addr, bytes([new]))
-        if kind == "bow" and new == 2 and self._read(ARROWS_ADDR) == 0:
-            self.t.write_memory(ARROWS_ADDR, bytes([DEFAULT_ARROWS]))
         logger.info(f"[ItemEffects] Progressive {kind}: {cur} -> {new}")
         return new
 
@@ -240,8 +268,9 @@ class ItemManager:
             snap[MUSHROOM_ADDR] = self._read(MUSHROOM_ADDR)
         elif item_key in ("shovel", "flute"):
             snap[SHOVEL_FLUTE_ADDR] = self._read(SHOVEL_FLUTE_ADDR)
-        elif item_key == "silver_arrows":
-            snap[BOW_ADDR] = self._read(BOW_ADDR)
+        elif item_key in ("bow", "silver_arrows"):
+            snap[BOW_FLAGS_ADDR] = self._read(BOW_FLAGS_ADDR)
+            snap[BOW_EQUIP_ADDR] = self._read(BOW_EQUIP_ADDR)
             snap[ARROWS_ADDR] = self._read(ARROWS_ADDR)
         elif item_key in self.item_addresses:
             addr, _ = self.item_addresses[item_key]
