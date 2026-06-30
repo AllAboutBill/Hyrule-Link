@@ -317,6 +317,7 @@ class App(tk.Tk):
         self.ui_conn = None
         self.ui_lock = threading.Lock()
         self._ui_stop = threading.Event()
+        self._ui_outbox = queue.Queue()   # actions queued while the socket is down
 
         # emulator detection runs on a background thread (its probes block ~1s);
         # the UI thread only ever reads this cached result, so it never stalls.
@@ -338,6 +339,7 @@ class App(tk.Tk):
         self._check_session_async()      # validate a saved Discord login
         threading.Thread(target=self._detect_loop, daemon=True).start()
         self._tick()
+        self._pump_loop()                # fast board refresh (server-state queue)
         self._animate_fields()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -1040,6 +1042,7 @@ class App(tk.Tk):
                 conn.send(json.dumps(hello))
                 with self.ui_lock:
                     self.ui_conn = conn
+                self._flush_outbox()             # send anything queued while down
                 while not self._ui_stop.is_set():
                     msg = json.loads(conn.recv())
                     self.state_q.put(msg)
@@ -1052,12 +1055,36 @@ class App(tk.Tk):
                 threading.Event().wait(2.5)
 
     def _ui_send(self, obj):
+        """Send an action over the board socket. If the socket is momentarily down
+        (reconnecting), queue it and flush on reconnect instead of silently dropping
+        it — otherwise a click during a hiccup just does nothing."""
+        data = json.dumps(obj)
         with self.ui_lock:
             if self.ui_conn:
                 try:
-                    self.ui_conn.send(json.dumps(obj))
+                    self.ui_conn.send(data)
+                    return
                 except Exception:
-                    pass
+                    self.ui_conn = None          # broke mid-send; fall through to queue
+        self._ui_outbox.put(data)
+
+    def _flush_outbox(self):
+        """Send anything queued while disconnected. Called right after (re)connect."""
+        while True:
+            try:
+                data = self._ui_outbox.get_nowait()
+            except queue.Empty:
+                return
+            with self.ui_lock:
+                if not self.ui_conn:
+                    self._ui_outbox.put(data)    # lost it again — requeue, retry next connect
+                    return
+                try:
+                    self.ui_conn.send(data)
+                except Exception:
+                    self.ui_conn = None
+                    self._ui_outbox.put(data)
+                    return
 
     # ── step 2: room (board + emulator + controls) ──────────────────────────
     def show_room(self):
@@ -2259,6 +2286,40 @@ class App(tk.Tk):
         self._button(bar, "Seed & patch…", self._seed_dialog).pack(side="left", padx=8)
         self._button(bar, "Cancel", win.destroy).pack(side="left")
 
+    # ── fast state pump (board feels instant) ───────────────────────────────
+    def _pump_state(self):
+        """Drain the server-state queue and repaint the board. Runs on a fast
+        loop so a click (claim / host give) shows up within ~90ms, instead of
+        waiting up to one 800ms _tick."""
+        new_state = False
+        while True:
+            try:
+                msg = self.state_q.get_nowait()
+            except queue.Empty:
+                break
+            t = msg.get("type")
+            if t == "state":
+                self.state = msg; new_state = True
+            elif t == "event":
+                self._log(msg.get("text", ""))
+            elif t == "reject":
+                reason = msg.get("reason", "")
+                self._log("⚠ " + reason)
+                if self.room is not None and ("room not found" in reason.lower()
+                                              or "room closed" in reason.lower()):
+                    messagebox.showinfo("HyruleLink", "This room was closed by an admin.")
+                    self._leave()
+                    break
+        if new_state and self.room is not None and hasattr(self, "board"):
+            self._render_board()
+
+    def _pump_loop(self):
+        try:
+            self._pump_state()
+        except Exception:
+            pass
+        self.after(90, self._pump_loop)   # stops when the window is destroyed, like _tick
+
     # ── periodic refresh ────────────────────────────────────────────────────
     def _tick(self):
         # Discord login results from the background poll/validate threads
@@ -2338,27 +2399,8 @@ class App(tk.Tk):
             else:
                 self._log("Seed generation failed: " + a)
                 messagebox.showerror("HyruleLink", "Couldn't generate a seed:\n" + a)
-        new_state = False
-        while True:
-            try:
-                msg = self.state_q.get_nowait()
-            except queue.Empty:
-                break
-            t = msg.get("type")
-            if t == "state":
-                self.state = msg; new_state = True
-            elif t == "event":
-                self._log(msg.get("text", ""));
-            elif t == "reject":
-                reason = msg.get("reason", "")
-                self._log("⚠ " + reason)
-                if self.room is not None and ("room not found" in reason.lower()
-                                              or "room closed" in reason.lower()):
-                    messagebox.showinfo("HyruleLink", "This room was closed by an admin.")
-                    self._leave()
-                    break          # stop draining; rest of _tick handles room=None
-        if new_state and self.room is not None and hasattr(self, "board"):
-            self._render_board()
+        # State/board updates are pumped on a much faster loop (_pump_state) so the
+        # board reflects a click within ~90ms instead of up to one 800ms tick.
 
         # status dots
         if self.room is not None:
