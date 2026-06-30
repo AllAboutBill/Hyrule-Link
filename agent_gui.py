@@ -333,6 +333,8 @@ class App(tk.Tk):
         self._avatar_q = queue.Queue()   # worker threads -> UI thread (PIL images)
         self._avatar_version = 0    # bumped when an avatar finishes loading (board sig)
         self._board_sig = None      # signature of the last board render (skip no-op rebuilds)
+        self._cards = {}            # item key -> card widget (reused across renders)
+        self._card_sigs = {}        # item key -> per-card fingerprint (rebuild only on change)
 
         self._build_chrome()
         self.show_start()
@@ -1179,6 +1181,7 @@ class App(tk.Tk):
 
         # the board (responsive grid: fills width, reflows columns to stay wide)
         self._board_sig = None       # fresh, empty board — force the first render
+        self._cards = {}; self._card_sigs = {}   # new board frame → no cached cards
         self.board_wrap = tk.Frame(f, bg=BG); self.board_wrap.pack(fill="both", expand=True)
         board_wrap = self.board_wrap
         self.canvas = tk.Canvas(board_wrap, bg=BG, highlightthickness=0)
@@ -1641,8 +1644,6 @@ class App(tk.Tk):
         if not force and sig == self._board_sig:
             return                       # nothing on the board changed — no rebuild
         self._board_sig = sig
-        for w in self.board.winfo_children():
-            w.destroy()
         if hasattr(self, "room_title_lbl"):
             self.room_title_lbl.config(text=self._room_title())   # reflect renames
         if hasattr(self, "rename_btn"):                           # host-only rename
@@ -1666,18 +1667,46 @@ class App(tk.Tk):
         ledger = self.state.get("ledger", {})
         cols = self._board_columns()
         self._board_cols = cols
+        s = self.state or {}
+        # Context shared by every card. When it changes (you/host/claiming/rules/
+        # mode/cols/avatars) every card's fingerprint changes and all rebuild;
+        # otherwise only the cards whose own state changed are rebuilt, so a single
+        # grant/pickup no longer destroys and repaints the whole grid (the "twitch").
+        gctx = (s.get("you"), self._is_host(), bool(s.get("claiming")),
+                s.get("rules_summary"), s.get("mode"), cols, self._avatar_version)
         # Render from the LOCAL catalog so a stale server (e.g. one still pooling
         # Bottle) can never inject items we've removed. Order/names are canonical.
         for i, it in enumerate(ITEMS):
-            cat = {"key": it.key, "name": it.name}
             e = ledger.get(it.key)
-            self._card(self.board, cat, e).grid(row=i // cols, column=i % cols,
-                                                 padx=4, pady=4, sticky="nsew")
+            csig = (gctx, self._card_state(e, s.get("you")))
+            cur = self._cards.get(it.key)
+            if (not force and cur is not None and cur.winfo_exists()
+                    and self._card_sigs.get(it.key) == csig):
+                continue                          # unchanged — leave this card in place
+            if cur is not None and cur.winfo_exists():
+                cur.destroy()
+            card = self._card(self.board, {"key": it.key, "name": it.name}, e)
+            card.grid(row=i // cols, column=i % cols, padx=4, pady=4, sticky="nsew")
+            self._cards[it.key] = card
+            self._card_sigs[it.key] = csig
         # equal-width columns that stretch to fill the canvas (wider, fewer rows)
         for c in range(cols):
             self.board.grid_columnconfigure(c, weight=1, minsize=CARD_MIN_PX, uniform="items")
         for c in range(cols, 12):                 # clear any columns from a wider layout
             self.board.grid_columnconfigure(c, weight=0, minsize=0, uniform="")
+
+    @staticmethod
+    def _card_state(e, you):
+        """Per-card fingerprint — everything about one ledger entry that changes how
+        its card looks. Mirrors the per-item part of _board_signature."""
+        if not e:
+            return None
+        return (e.get("owner"), e.get("owner_name"), e.get("tier"), e.get("level"),
+                you in e.get("discovered", []),
+                round(e.get("cooldown_remaining", 0) or 0),
+                round(e.get("hold_remaining", 0) or 0) if e.get("hold_remaining") is not None else None,
+                round(e.get("borrow_remaining", 0) or 0) if e.get("borrow_remaining") is not None else None,
+                e.get("locked"))
 
     def _board_columns(self):
         """How many item columns fit the current board width — favouring a wide,
