@@ -305,6 +305,7 @@ class App(tk.Tk):
         self._pub_url_entry = None  # dialog widget that shows the public link
         self.seedgen_q = queue.Queue()  # in-app seed generation status
         self.room = None            # join/create payload
+        self._autolink_armed = False  # auto-connect once an emulator is detected
         self.agent = None           # emulator link (HyruleAgent)
         self.transport = None
         self.state = None           # latest ledger state from the ui socket
@@ -348,7 +349,22 @@ class App(tk.Tk):
                     self._detected = detect_emulator()
                 except Exception:
                     pass
+                # Auto-link: once an emulator is actually detected, connect for the
+                # player. Gated on `armed` so a manual Disconnect (which disarms)
+                # isn't immediately undone, and on detection so we never nag.
+                if (self._autolink_armed
+                        and self.cfg.get("auto_connect", True)
+                        and self._detected[2] != "not detected"):
+                    self.after(0, self._auto_connect)
             self._stop_all.wait(1.5)
+
+    def _auto_connect(self):
+        # Runs on the UI thread; re-check everything (state may have changed between
+        # the background detect and now).
+        if (self._autolink_armed and self.agent is None and self.room is not None
+                and self.cfg.get("auto_connect", True)
+                and self._detected[2] != "not detected"):
+            self._connect(auto=True)
 
     # ── chrome ──────────────────────────────────────────────────────────────
     def _configure_ttk(self):
@@ -989,6 +1005,9 @@ class App(tk.Tk):
 
     def _enter_room(self, data):
         self.room = data
+        # Arm auto-link: once an emulator is detected we connect on our own, so the
+        # player doesn't have to hit Connect. A manual Disconnect disarms it.
+        self._autolink_armed = True
         # remember our identity in this room so a future launch rejoins as US.
         # Merge (don't replace) so a ROM pinned to this room survives the rejoin.
         rooms = self.cfg.setdefault("rooms", {})
@@ -1844,11 +1863,13 @@ class App(tk.Tk):
     def _toggle_connect(self):
         self._disconnect() if self.agent else self._connect()
 
-    def _resolve_transport(self):
+    def _resolve_transport(self, auto=False):
         """Build (transport, label) from the pinned choice, or auto-detect.
 
         Returns (None, None) if the user declined to start a source when nothing
-        was detected (auto mode only)."""
+        was detected (auto mode only). When `auto` is set (an automatic link
+        attempt), a "not detected" result returns quietly instead of prompting —
+        the detect loop will try again when an emulator appears."""
         from agent.sni.emu_connector import EmuConnector
         from agent.sni.qusb2snes_tracker import QUsb2SnesTracker
         pin = self.cfg.get("emu_pin", "auto")
@@ -1860,6 +1881,8 @@ class App(tk.Tk):
         # auto
         transport, source, label = detect_emulator()
         if label == "not detected":
+            if auto:
+                return None, None
             if messagebox.askyesno("HyruleLink",
                 "No emulator detected.\n\nStart the SNI bridge now? It's needed for snes9x-rr, "
                 "BizHawk, or real hardware.\n\n(snes9x-nwa and RetroArch connect directly — if "
@@ -1872,9 +1895,9 @@ class App(tk.Tk):
             return QUsb2SnesTracker(), label
         return EmuConnector(source=source), label
 
-    def _connect(self):
+    def _connect(self, auto=False):
         from agent.agent import HyruleAgent
-        transport, label = self._resolve_transport()
+        transport, label = self._resolve_transport(auto=auto)
         if transport is None:
             return
         self.transport = transport
@@ -1902,6 +1925,7 @@ class App(tk.Tk):
             time.sleep(0.5)
 
     def _disconnect(self):
+        self._autolink_armed = False   # a manual disconnect should stay disconnected
         try:
             if self.agent:
                 self.agent.stop()
