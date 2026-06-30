@@ -211,6 +211,15 @@ class AgentApplyTests(unittest.TestCase):
         self.assertEqual(discovered_level(BY_KEY["powder"], track), 0)
         self.assertEqual(discovered_level(BY_KEY["mushroom"], track), 1)
 
+    def test_apply_retries_transient_failure_instead_of_dropping_item(self):
+        # A dropped verification read makes the first enable() raise; _apply must
+        # retry (grants are idempotent) and end up applying the item + acking ok.
+        transport = FlakyReadTransport(drops=6)   # fails the first enable's read
+        agent = self.agent(transport)
+        agent._apply("hookshot", 1, True)
+        self.assertTrue(agent.ws.messages[-1]["ok"])
+        self.assertEqual(transport.memory[0xF342], 0x01)
+
     def test_dropped_read_aborts_grant_without_clobbering(self):
         # Boots is a read-modify-write on the ability byte; a persistently
         # failing read must NOT write a 0-derived value over the other bits.

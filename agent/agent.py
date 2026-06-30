@@ -132,27 +132,35 @@ class HyruleAgent:
                 time.sleep(3)  # reconnect backoff
 
     # ── applying server commands ───────────────────────────────────────────
-    def _apply(self, key, level, enable):
+    def _apply(self, key, level, enable, tries=3):
         if key not in BY_KEY:
             return
-        if not self.t.connected:
-            self.t.connect()
-        try:
-            if enable:
-                raw = self.fx.enable(key, level)
-                logger.info("Granted %s (lvl %s)", key, level)
-            else:
-                raw = self.fx.disable(key)
-                logger.info("Revoked %s", key)
-            if key == "boots":
-                self._boots_owned = enable
-            # Suppress our own write so the poller doesn't re-broadcast it.
-            with self._lock:
-                self._expected[BY_KEY[key].addr] = raw
-            self._send_applied(key, enable, True)
-        except Exception as e:
-            logger.warning("apply %s failed: %s", key, e)
-            self._send_applied(key, enable, False, str(e))
+        # Grants/revokes are idempotent (they set absolute state), so retry a few
+        # times across a transient emulator hiccup rather than silently dropping
+        # the item — a dropped write/read must not leave the player without an item
+        # the ledger says they own.
+        last = None
+        for _ in range(tries):
+            if not self.t.connected:
+                self.t.connect()
+            try:
+                if enable:
+                    raw = self.fx.enable(key, level)
+                    logger.info("Granted %s (lvl %s)", key, level)
+                else:
+                    raw = self.fx.disable(key)
+                    logger.info("Revoked %s", key)
+                if key == "boots":
+                    self._boots_owned = enable
+                # Suppress our own write so the poller doesn't re-broadcast it.
+                with self._lock:
+                    self._expected[BY_KEY[key].addr] = raw
+                self._send_applied(key, enable, True)
+                return
+            except Exception as e:
+                last = e
+        logger.warning("apply %s failed after %d tries: %s", key, tries, last)
+        self._send_applied(key, enable, False, str(last))
 
     def _send_applied(self, key, enable, ok, error=None):
         if not (self.ws and self._ws_ready.is_set()):
