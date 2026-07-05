@@ -21,7 +21,7 @@ import websocket  # websocket-client
 from shared.items import ITEMS, BY_KEY, discovered_level
 from shared import protocol as P
 from .effects import Effects
-from .sni.memory_constants import MEMORY_ADDRESSES, PLAYABLE_MODES
+from .sni.memory_constants import MEMORY_ADDRESSES, OUT_OF_GAME_MODES, PLAYABLE_MODES
 from .sni.item_effects import ABILITY_ADDR, RUN_ABILITY_MASK
 
 logger = logging.getLogger("HyruleAgent")
@@ -39,7 +39,7 @@ _TRACKED_SIZE = _TRACKED_ADDRS[-1] - _TRACKED_START + 1
 
 class HyruleAgent:
     def __init__(self, transport, server_ws_url, room, user_id, player_token,
-                 poll_interval=1.0):
+                 poll_interval=1.0, on_notify=None):
         self.t = transport
         self.fx = Effects(transport)
         self.url = server_ws_url
@@ -47,6 +47,10 @@ class HyruleAgent:
         self.user_id = int(user_id)
         self.token = player_token
         self.poll_interval = poll_interval
+        # optional callback(text) so a host app (the desktop GUI) can surface
+        # server notifications even when the transport has no OSD (Snes9x-NWA,
+        # SNI/hardware — only RetroArch can draw on-screen messages itself).
+        self.on_notify = on_notify
 
         self.ws = None
         self._ws_ready = threading.Event()
@@ -56,6 +60,14 @@ class HyruleAgent:
         self._lock = threading.Lock()
         self._baseline = {}   # addr -> last raw byte we accept as "known"
         self._expected = {}   # addr -> raw byte we just wrote (suppress once)
+        # Grants/revokes that arrived while no save was loaded (title screen /
+        # file select). Writing then would land in a stale $7EF000 mirror and be
+        # wiped by the next file load, so they wait here until gameplay resumes.
+        self._pending = {}    # item key -> (level, enable)
+        # True after MODE passes through an out-of-game module (file select,
+        # save-quit, loading). Re-entering gameplay from there means the WRAM
+        # mirror may be a different/re-loaded save: re-seed and resync.
+        self._out_of_game = False
         # Whether we currently own the boots. ALttP can clear the dash-ability
         # flag ($7EF379 bit 0x04) on screen transitions, so we re-assert it each
         # poll while owned — otherwise "have boots but can't run".
@@ -100,11 +112,16 @@ class HyruleAgent:
         text = " ".join(str(text).split())[:120]
         if not text:
             return
+        logger.info("• %s", text)          # always visible in the console/app log
+        if self.on_notify:
+            try:
+                self.on_notify(text)       # desktop-app toast (works on any transport)
+            except Exception as e:
+                logger.debug("notify callback failed: %s", e)
         show = getattr(self.t, "show_message", None)
         if show and self.t.connected:
             try:
-                if show(text):
-                    logger.info("Emulator notification: %s", text)
+                show(text)                 # emulator OSD (RetroArch only)
             except Exception as e:
                 logger.debug("emulator notification failed: %s", e)
 
@@ -135,6 +152,21 @@ class HyruleAgent:
     def _apply(self, key, level, enable, tries=3):
         if key not in BY_KEY:
             return
+        # Only write while a save is actually loaded. Outside a playable module
+        # (title screen, file select, loading) the $7EF000 mirror isn't the live
+        # save — a write there is wiped by the next file load, leaving the game
+        # out of step with the ledger. Defer instead; the poll loop flushes the
+        # queue the moment gameplay resumes. (An unreadable mode byte is treated
+        # as a transient hiccup and handled by the retry loop below.)
+        gm = self.t.read_memory(GAME_MODE_ADDR, size=1)
+        if gm and int(gm[0]) not in PLAYABLE_MODES:
+            with self._lock:
+                self._pending[key] = (level, enable)
+            logger.info("Deferred %s of %s — no save loaded (mode 0x%02X)",
+                        "grant" if enable else "revoke", key, int(gm[0]))
+            return
+        with self._lock:
+            self._pending.pop(key, None)   # this command supersedes any deferred one
         # Grants/revokes are idempotent (they set absolute state), so retry a few
         # times across a transient emulator hiccup rather than silently dropping
         # the item — a dropped write/read must not leave the player without an item
@@ -188,7 +220,19 @@ class HyruleAgent:
         # at file-select / transitions the bytes can be stale or zeroed.
         gm = self.t.read_memory(GAME_MODE_ADDR, size=1)
         if not gm or int(gm[0]) not in PLAYABLE_MODES:
+            # Passing through the title/file-select/loading modules means the
+            # next playable state may be a different or re-loaded save.
+            if gm and int(gm[0]) in OUT_OF_GAME_MODES:
+                self._out_of_game = True
             return
+        if self._out_of_game:
+            self._out_of_game = False
+            # A (re)loaded save reverts WRAM to what was last saved: items we
+            # revoked reappear and items we granted vanish. Re-seed detection so
+            # the reverted bytes aren't reported as fresh pickups, and have the
+            # server re-push ownership so the game matches the ledger again.
+            self._resync("Save (re)loaded")
+        self._flush_pending()
 
         # All inventory bytes occupy one small contiguous SRAM-mirror range.
         # Reading it once cuts RetroArch UDP traffic from ~23 round trips per
@@ -244,12 +288,20 @@ class HyruleAgent:
         elif not self._boots_owned and have:
             self.t.write_memory(ABILITY_ADDR, bytes([ability_byte & ~RUN_ABILITY_MASK]))
 
-    def _on_emu_reconnect(self):
-        """Emulator came back (e.g. crash + save reload). Re-seed detection from
-        the reloaded save WITHOUT reporting its contents as fresh pickups, and
-        ask the server to re-push our ownership so the game is reconciled to the
-        authoritative ledger."""
-        logger.info("Emulator reconnected — re-seeding state and requesting resync.")
+    def _flush_pending(self):
+        """Apply grants/revokes that were deferred while no save was loaded."""
+        with self._lock:
+            pending = list(self._pending.items())
+            self._pending.clear()
+        for key, (level, enable) in pending:
+            self._apply(key, level, enable)
+
+    def _resync(self, reason):
+        """Re-seed pickup detection from the current WRAM WITHOUT reporting its
+        contents as fresh pickups, and ask the server to re-push our ownership
+        so the game is reconciled to the authoritative ledger. Used when the
+        emulator comes back (crash/reload) and when a save is (re)loaded."""
+        logger.info("%s — re-seeding state and requesting resync.", reason)
         with self._lock:
             self._baseline.clear()
             self._expected.clear()
@@ -265,7 +317,7 @@ class HyruleAgent:
                 if not self.t.connected:
                     self.t.connect()
                 if self.t.connected and not self._emu_was_connected:
-                    self._on_emu_reconnect()
+                    self._resync("Emulator reconnected")
                     self._send_status()
                 elif not self.t.connected and self._emu_was_connected:
                     self._send_status()  # emulator just went offline

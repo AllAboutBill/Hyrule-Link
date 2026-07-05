@@ -69,3 +69,13 @@ MEMORY_ADDRESSES = {
 
 PLAYABLE_MODES = {0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0E}
 OUTDOOR_MODES = {0x08, 0x09, 0x0A, 0x0B}
+
+# MODE ($7E0010) values where NO save file is loaded into the $7EF000 WRAM
+# mirror — title (0x00), file select (0x01), copy/erase/name player (0x02-0x04),
+# loading a game (0x05), attract demo (0x14), save-and-quit (0x17), and the
+# "select where to start" prompt (0x1B). Passing through any of these means the
+# mirror the agent reads/writes may next belong to a different (or re-loaded)
+# save, so item state must be re-seeded and re-synced from the server ledger.
+# Value table: ALTTPR-REFERENCE docs/01-ram-and-sram-map.md §1 (jpdasm /
+# alttp-disassembly MODE table).
+OUT_OF_GAME_MODES = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x14, 0x17, 0x1B}

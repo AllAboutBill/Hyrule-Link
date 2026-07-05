@@ -187,6 +187,11 @@ class Effects:
     """Result of resolving a pickup/claim: commands + log line, or a rejection."""
     grants: List[Tuple[int, str, int]] = field(default_factory=list)   # (user, key, level)
     revokes: List[Tuple[int, str]] = field(default_factory=list)       # (user, key)
+    # per-player on-screen notifications (user, text) — worded for the recipient
+    # ("Lamp stolen from Bill" to the thief, "Lamp stolen by Ted" to the victim).
+    # Shown via the emulator OSD / desktop app; keep them short and plain ASCII
+    # (RetroArch's OSD font has no emoji).
+    notifies: List[Tuple[int, str]] = field(default_factory=list)
     event: Optional[str] = None
     reject: Optional[str] = None
     changed: bool = False
@@ -227,9 +232,14 @@ def resolve_pickup(room: RoomState, user_id: int, key: str, level: int) -> Effec
     name = room.names.get(user_id, f"player {user_id}")
     if prev is not None and prev != user_id:
         eff.revokes.append((prev, key))
-        eff.event = f"{name} grabbed {item.name} from {room.names.get(prev, 'someone')}"
+        prev_name = room.names.get(prev, "someone")
+        eff.event = f"{name} grabbed {item.name} from {prev_name}"
+        eff.notifies.append((user_id, f"{item.name} taken from {prev_name}"))
+        eff.notifies.append((prev, f"{item.name} lost - {name} found their own"))
     elif prev == user_id:
         eff.event = f"{name} upgraded {item.name}" if upgraded else None
+        if upgraded:
+            eff.notifies.append((user_id, f"{item.name} upgraded to {tier_label(item, personal)}"))
     else:
         eff.event = f"{name} found {item.name}" + ("" if first_seen else " again")
     return eff
@@ -311,10 +321,20 @@ def resolve_claim(room: RoomState, user_id: int, key: str) -> Effects:
     eff.grants.append((user_id, key, it.level))
     if prev is not None:
         eff.revokes.append((prev, key))
+        prev_name = room.names.get(prev, "someone")
         verb = "borrowed" if it.borrowed else ("stole" if not found else "reclaimed")
-        eff.event = f"{name} {verb} {item.name} from {room.names.get(prev, 'someone')}"
+        eff.event = f"{name} {verb} {item.name} from {prev_name}"
+        if it.borrowed:
+            secs = int(R.get("borrow_s", 0))
+            eff.notifies.append((user_id, f"{item.name} borrowed from {prev_name} ({secs}s)"))
+            eff.notifies.append((prev, f"{item.name} borrowed by {name} ({secs}s)"))
+        else:
+            past = "stolen" if not found else "reclaimed"
+            eff.notifies.append((user_id, f"{item.name} {past} from {prev_name}"))
+            eff.notifies.append((prev, f"{item.name} {past} by {name}"))
     else:
         eff.event = f"{name} claimed {item.name}"
+        eff.notifies.append((user_id, f"{item.name} claimed"))
     return eff
 
 
@@ -444,8 +464,19 @@ class RoomHub:
         except Exception:
             pass
 
+    async def _send_notifies(self, code: str, notifies):
+        """Deliver per-player (user_id, text) on-screen notifications."""
+        agents = self.agents.get(code, {})
+        for uid, text in notifies:
+            ws = agents.get(uid)
+            if ws:
+                await self._send(ws, {"type": P.NOTIFY, "text": text})
+
     async def _notify_transfers(self, code: str, grants, revokes, summary=None):
-        """Send concise, player-specific emulator notifications after item moves."""
+        """Send concise, player-specific emulator notifications after item moves.
+
+        Fallback wording for transfers that didn't supply explicit per-player
+        `notifies` (see Effects.notifies — the resolver knows the real verb)."""
         room = self.rooms.get(code)
         if room is None:
             return
@@ -491,7 +522,10 @@ class RoomHub:
             ws = self.agents.get(code, {}).get(uid)
             if ws:
                 await self._send(ws, {"type": P.REVOKE, "item": ikey})
-        await self._notify_transfers(code, eff.grants, eff.revokes)
+        if eff.notifies:
+            await self._send_notifies(code, eff.notifies)
+        else:
+            await self._notify_transfers(code, eff.grants, eff.revokes)
         if eff.changed:
             self._persist(room, key)
         if eff.event:
@@ -675,6 +709,7 @@ class RoomHub:
                 ws = self.agents.get(code, {}).get(player_id)
                 if ws:
                     await self._send(ws, {"type": P.REVOKE, "item": key})
+                    await self._send(ws, {"type": P.NOTIFY, "text": f"Host took {item.name}"})
         self._persist(room, key)
         if not found:
             verb = "un-found"
@@ -710,12 +745,19 @@ class RoomHub:
             ws = self.agents.get(code, {}).get(player_id)
             if ws:
                 await self._send(ws, {"type": P.GRANT, "item": key, "level": it.level})
+                gave = f"Host gave you {item.name}"
+                if item.cap > 1:
+                    gave += f" ({tier_label(item, it.level)})"
+                await self._send(ws, {"type": P.NOTIFY, "text": gave})
         else:
             it.owner = None
         if prev is not None and prev != player_id:
             ws = self.agents.get(code, {}).get(prev)
             if ws:
                 await self._send(ws, {"type": P.REVOKE, "item": key})
+                took = (f"Host moved {item.name} to {room.names.get(player_id, 'someone')}"
+                        if player_id is not None else f"Host took {item.name}")
+                await self._send(ws, {"type": P.NOTIFY, "text": took})
         self._persist(room, key)
         await self.broadcast_state(code)
 
@@ -824,21 +866,27 @@ class RoomHub:
         if not (R.get("hold_limit_s") or R.get("idle_release_s") or R.get("auto_shuffle_s")
                 or any(it.borrowed for it in room.items.values())):
             return                                    # no time-based rules → nothing to do
-        grants, revokes, events = [], [], []
-        notification = None
+        grants, revokes, events, notifies = [], [], [], []
 
         # 1. borrow leases expire → revert to previous owner, else the pool
         for key, it in room.items.items():
             if it.borrowed and now >= it.borrow_until:
                 it.borrowed, it.borrow_until = False, 0.0
+                borrower = it.owner
                 target = it.borrow_prev if R.get("borrow_revert") == "prev_owner" else None
                 it.borrow_prev = None
                 if target is not None and target in room.names:
                     self._reassign(room, key, target, now, grants, revokes)
                     events.append(f"↩ {BY_KEY[key].name} returned to {room.names.get(target)}")
+                    if borrower is not None:
+                        notifies.append((borrower, f"{BY_KEY[key].name} borrow ended - "
+                                                   f"returned to {room.names.get(target)}"))
+                    notifies.append((target, f"{BY_KEY[key].name} returned to you"))
                 else:
                     self._release(room, key, now, grants, revokes)
                     events.append(f"↩ {BY_KEY[key].name} borrow ended")
+                    if borrower is not None:
+                        notifies.append((borrower, f"{BY_KEY[key].name} borrow ended"))
 
         # 2. idle release → an offline owner drops their items back to the pool
         idle = R.get("idle_release_s", 0)
@@ -881,20 +929,31 @@ class RoomHub:
                     if new == it.owner:
                         it.held_since = now
                         continue
+                    holder = it.owner
                     self._reassign(room, key, new, now, grants, revokes)
                     events.append(f"🔥 {BY_KEY[key].name} → {room.names.get(new, 'someone')}")
+                    notifies.append((new, f"Hot potato - {BY_KEY[key].name} is yours"))
+                    if holder is not None:
+                        notifies.append((holder, f"{BY_KEY[key].name} passed to "
+                                                 f"{room.names.get(new, 'someone')}"))
                 else:
                     if it.owner is None or (now - it.held_since) < hl:
                         continue
                     if expiry == "release":
+                        holder = it.owner
                         self._release(room, key, now, grants, revokes)
                         events.append(f"⌛ {BY_KEY[key].name} released — anyone can claim it")
+                        notifies.append((holder, f"{BY_KEY[key].name} released - up for grabs"))
                     else:                             # return_finder
                         finders = sorted(it.discovered)
                         target = finders[0] if finders else None
                         if target is not None and target != it.owner:
+                            holder = it.owner
                             self._reassign(room, key, target, now, grants, revokes)
                             events.append(f"↩ {BY_KEY[key].name} → {room.names.get(target, 'someone')}")
+                            notifies.append((target, f"{BY_KEY[key].name} returned to you"))
+                            notifies.append((holder, f"{BY_KEY[key].name} returned to "
+                                                     f"{room.names.get(target, 'someone')}"))
                         else:
                             it.held_since = now
 
@@ -903,7 +962,7 @@ class RoomHub:
         if asf and (now - room.last_shuffle) >= asf:
             room.last_shuffle = now
             scope = R.get("shuffle_scope", "all")
-            moved = 0
+            got, lost = {}, {}          # uid -> [item names] this shuffle
             for key, it in room.items.items():
                 if not it.discovered:
                     continue
@@ -917,19 +976,27 @@ class RoomHub:
                 new = random.choice(avail)
                 if new == it.owner:
                     continue
+                if it.owner is not None:
+                    lost.setdefault(it.owner, []).append(BY_KEY[key].name)
+                got.setdefault(new, []).append(BY_KEY[key].name)
                 self._reassign(room, key, new, now, grants, revokes)
-                moved += 1
-            if moved:
+            if got:
                 events.append("🌀 Chaos shuffle! Items moved.")
-                notification = "Items shuffled"
+                for uid in sorted(set(got) | set(lost)):
+                    parts = []
+                    if got.get(uid):
+                        parts.append("got " + ", ".join(got[uid]))
+                    if lost.get(uid):
+                        parts.append("lost " + ", ".join(lost[uid]))
+                    notifies.append((uid, "Shuffle! " + " - ".join(parts)))
 
         if grants or revokes:
-            await self._send_commands(code, grants, revokes, notification)
+            await self._send_commands(code, grants, revokes, notifies)
             for ev in events:
                 await self.broadcast_event(code, ev)
             await self.broadcast_state(code)
 
-    async def _send_commands(self, code, grants, revokes, notification=None):
+    async def _send_commands(self, code, grants, revokes, notifies=None):
         db.touch_room(code)
         for (uid, key, level) in grants:
             ws = self.agents.get(code, {}).get(uid)
@@ -939,7 +1006,10 @@ class RoomHub:
             ws = self.agents.get(code, {}).get(uid)
             if ws:
                 await self._send(ws, {"type": P.REVOKE, "item": key})
-        await self._notify_transfers(code, grants, revokes, notification)
+        if notifies:
+            await self._send_notifies(code, notifies)
+        else:
+            await self._notify_transfers(code, grants, revokes)
 
     async def drop_room(self, code: str):
         """Tear a room down: close every live connection and forget it in memory

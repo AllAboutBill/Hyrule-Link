@@ -1997,7 +1997,8 @@ class App(tk.Tk):
         h = QueueLogHandler(self.log_q); h.setFormatter(logging.Formatter("%(message)s"))
         logging.getLogger().addHandler(h); logging.getLogger().setLevel(logging.INFO)
         self.agent = HyruleAgent(self.transport, self._ws_url(), self.room["code"],
-                                 self.room["player_id"], self.room["player_token"], poll_interval=0.5)
+                                 self.room["player_id"], self.room["player_token"], poll_interval=0.5,
+                                 on_notify=self._notify_from_agent)
         self.agent.start()
         self.btn_connect.config(text="Disconnect", bg=PANEL2, fg=INK)
         self._log(f"Linking emulator via {label}…")
@@ -2375,6 +2376,12 @@ class App(tk.Tk):
                 self.state = msg; new_state = True
             elif t == "event":
                 self._log(msg.get("text", ""))
+            elif t == "_notify":
+                # personal on-screen message from the agent (grant/steal/etc.) —
+                # mirror it in the app so non-RetroArch players (no OSD) see it
+                text = msg.get("text", "")
+                self._log("✦ " + text)
+                self._toast(text)
             elif t == "reject":
                 reason = msg.get("reason", "")
                 self._log("⚠ " + reason)
@@ -2392,6 +2399,21 @@ class App(tk.Tk):
         except Exception:
             pass
         self.after(90, self._pump_loop)   # stops when the window is destroyed, like _tick
+
+    def _notify_from_agent(self, text):
+        """Called from the agent's ws thread — hand off to the Tk thread via the
+        state queue (Tk widgets must only be touched from the main loop)."""
+        self.state_q.put({"type": "_notify", "text": text})
+
+    def _toast(self, text, ms=4000):
+        """Flash a transient message in the room screen's toast slot."""
+        lbl = getattr(self, "toast_lbl", None)
+        if lbl is None or not lbl.winfo_exists():
+            return
+        lbl.config(text=text, fg=GREEN)
+        # only clear if a newer toast hasn't replaced this one in the meantime
+        self.after(ms, lambda: lbl.winfo_exists() and lbl.cget("text") == text
+                   and lbl.config(text=""))
 
     # ── periodic refresh ────────────────────────────────────────────────────
     def _tick(self):

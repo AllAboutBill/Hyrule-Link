@@ -96,6 +96,9 @@ class SequencedClient:
 
 class AgentApplyTests(unittest.TestCase):
     def agent(self, transport):
+        # in-game (Dungeon Mode) unless a test explicitly moves MODE elsewhere —
+        # _apply defers writes while no save is loaded
+        transport.memory.setdefault(GAME_MODE_ADDR, 0x07)
         agent = HyruleAgent(transport, "ws://test", "ROOM", 1, "token")
         agent.ws = Socket()
         agent._ws_ready.set()
@@ -298,6 +301,70 @@ class AgentApplyTests(unittest.TestCase):
         for _ in range(READ_FAILURE_LIMIT):
             connector.read_memory(0x10, 1)
         self.assertFalse(connector.connected)
+
+
+class AgentSaveGateTests(unittest.TestCase):
+    """Writes must only land while a save is loaded, and a save (re)load must
+    re-seed detection + resync instead of reporting reverted bytes as pickups.
+    MODE values from ALTTPR-REFERENCE docs/01-ram-and-sram-map.md §1."""
+
+    LAMP = 0xF34A
+
+    def agent(self, transport):
+        agent = HyruleAgent(transport, "ws://test", "ROOM", 1, "token")
+        agent.ws = Socket()
+        agent._ws_ready.set()
+        return agent
+
+    def test_grant_at_file_select_is_deferred_until_gameplay(self):
+        t = MemoryTransport()
+        t.memory[GAME_MODE_ADDR] = 0x01                   # file select — no save loaded
+        agent = self.agent(t)
+        agent._apply("lamp", 1, True)
+        self.assertEqual(t.memory.get(self.LAMP, 0), 0)   # nothing written yet
+        t.memory[GAME_MODE_ADDR] = 0x07                   # gameplay resumes
+        agent._poll_once()
+        self.assertEqual(t.memory[self.LAMP], 1)          # deferred grant applied
+
+    def test_newer_command_supersedes_a_deferred_one(self):
+        t = MemoryTransport()
+        t.memory[GAME_MODE_ADDR] = 0x01
+        agent = self.agent(t)
+        agent._apply("lamp", 1, True)
+        agent._apply("lamp", 0, False)                    # revoke arrives while deferred
+        t.memory[GAME_MODE_ADDR] = 0x07
+        agent._poll_once()
+        self.assertEqual(t.memory.get(self.LAMP, 0), 0)   # only the revoke ran
+
+    def test_save_reload_is_resynced_not_reported_as_pickups(self):
+        t = MemoryTransport()
+        t.memory[GAME_MODE_ADDR] = 0x07
+        t.memory[self.LAMP] = 1                           # player holds the lamp
+        agent = self.agent(t)
+        agent._poll_once()                                # seed baseline
+        agent._apply("lamp", 0, False)                    # server revoked it
+        agent._poll_once()                                # our own write echoes back
+        t.memory[GAME_MODE_ADDR] = 0x17                   # save and quit
+        agent._poll_once()
+        t.memory[self.LAMP] = 1                           # reload: old save has the lamp
+        t.memory[GAME_MODE_ADDR] = 0x07
+        agent.ws.messages.clear()
+        agent._poll_once()
+        pickups = [m for m in agent.ws.messages if m.get("type") == "pickup"]
+        self.assertEqual(pickups, [])                     # a revert is NOT a fresh find
+        self.assertIn({"type": "resync"}, agent.ws.messages)
+
+    def test_death_does_not_trigger_a_resync(self):
+        t = MemoryTransport()
+        t.memory[GAME_MODE_ADDR] = 0x07
+        agent = self.agent(t)
+        agent._poll_once()
+        t.memory[GAME_MODE_ADDR] = 0x12                   # death: WRAM persists
+        agent._poll_once()
+        t.memory[GAME_MODE_ADDR] = 0x07
+        agent.ws.messages.clear()
+        agent._poll_once()
+        self.assertNotIn({"type": "resync"}, agent.ws.messages)
 
 
 if __name__ == "__main__":

@@ -19,7 +19,23 @@ held by **only one player at a time**.
 
 It works by reading/writing SNES WRAM live (the SRAM mirror at `$7EF000`),
 exactly like the reference tools it was built from (TwitchBot SNI, AlttprHelper,
-ALTTPRFollowerInjector).
+ALTTPRFollowerInjector). RAM addresses and game-mode gating follow the
+[ALTTPR-REFERENCE](https://github.com/AllAboutBill/ALTTPR-REFERENCE) docs.
+
+**On-screen messages.** Every item move sends the involved players a short
+personal message — *"Lamp stolen from Bill"*, *"Hot potato - Bow is yours"*,
+*"Sword borrowed by Ted (60s)"*, *"Host gave you Sword (Gold)"*. On RetroArch it
+draws on the emulator's own OSD (`SHOW_MSG`); on every transport it also appears
+as a toast + activity line in the desktop app (Snes9x-NWA and SNI/hardware have
+no OSD, and true in-game text would need a ROM patch — the dialog font isn't
+resident in VRAM, per the reference docs).
+
+**Save-aware syncing.** The agent only writes items while a save is actually
+loaded (`MODE` `$7E0010` in a playable module) — grants/revokes that arrive at
+the title screen or file select are queued and applied when gameplay resumes.
+Passing through the file-select/loading modules re-seeds pickup detection and
+requests a full resync, so reloading an older save can't re-report reverted
+items as fresh finds or leave the game out of step with the ledger.
 
 ## Pieces
 
