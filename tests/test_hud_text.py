@@ -19,12 +19,14 @@ class EncodingTests(unittest.TestCase):
     """Glyph mapping = the game's own hud.c `L(x)` macro (zelda3)."""
 
     def test_char_word_matches_the_games_font_layout(self):
-        self.assertEqual(char_word("A"), 0x2550)
-        self.assertEqual(char_word("Z"), 0x2550 + 25)
+        # letters: rando HUD sheet 0xDC font at chars 0x15D+ (verified live)
+        self.assertEqual(char_word("A"), 0x255D)
+        self.assertEqual(char_word("Z"), 0x255D + 25)
+        # digits: classic HUD digit tiles (z3randomizer timer.asm, +$2490)
         self.assertEqual(char_word("0"), 0x2490)
         self.assertEqual(char_word("9"), 0x2499)
-        self.assertEqual(char_word(" "), 0x24F5)
-        self.assertEqual(char_word("-"), 0x24F5)   # no punctuation in the font
+        self.assertEqual(char_word(" "), 0x247F)
+        self.assertEqual(char_word("-"), 0x247F)   # no punctuation in the font
 
     def test_encode_uppercases_centres_and_pads(self):
         strip = encode_text("hi", 6)               # -> "  HI  "

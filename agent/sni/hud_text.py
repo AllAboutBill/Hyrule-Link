@@ -50,9 +50,20 @@ HUD_FLAG_ADDR = 0x0016       # $7E0016 flag_update_hud_in_nmi
 HUD_COLS = 32
 HUD_ROWS = 5                 # buffer rows 0-4 (165 words = 5*32 + 5 spill)
 
-SPACE_WORD = 0x24F5          # the game's own HUD space glyph
-LETTER_BASE = 0x2550         # 'A' (tile 0x150, priority + palette 1)
-DIGIT_BASE = 0x2490          # '0' (tile 0x90)
+# Glyphs verified against the REAL ALTTPR in-game tile layout (NOT zelda3's
+# enhancement font, which mislead an earlier version): z3randomizer repoints
+# GFX sheet 0xDC to its own HUD sheet (data/c2807_v4.gfx), loaded at BG3 char
+# indices 0x100-0x17F during gameplay. That sheet contains a full uppercase
+# font at tiles 0x5D-0x76 ('A'-'Z', followed by digits 0-8) — the map screen's
+# HC/L1/AT/D1-D7/GT labels sit right before it. Digits use the classic HUD
+# digit tiles 0x90-0x99 (z3randomizer timer.asm renders the challenge timer
+# with `!ADD.w #$2490`), and 0x247F is the blank the timer clears with.
+# Confirmed live: text written with these words rendered pixel-perfect on a
+# real seed (and the earlier wrong font's garbage decoded exactly to this
+# layout: "LAMP" -> tiles [D7][HC][GT][C] = 0x5B/0x50/0x5C/0x5F + 0x100).
+SPACE_WORD = 0x247F          # blank tile the rando's own timer uses
+LETTER_BASE = 0x255D         # 'A' (char 0x15D = HUD sheet 0xDC tile 0x5D)
+DIGIT_BASE = 0x2490          # '0' (char 0x90, classic HUD digits)
 
 DEFAULT_ROW = 4              # bottom HUD row — measured free of game writes
 DEFAULT_COL = 5              # cols 0-4 belong to the item box frame
