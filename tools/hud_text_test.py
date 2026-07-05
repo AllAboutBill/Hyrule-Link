@@ -27,8 +27,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("text", nargs="?", default="HELLO FROM HYRULELINK")
     ap.add_argument("--row", type=int, default=4)
-    ap.add_argument("--col", type=int, default=1)
-    ap.add_argument("--width", type=int, default=30)
+    ap.add_argument("--col", type=int, default=5)
+    ap.add_argument("--width", type=int, default=20)
     ap.add_argument("--seconds", type=float, default=6.0)
     args = ap.parse_args()
 

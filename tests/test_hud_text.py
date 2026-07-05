@@ -3,8 +3,8 @@ import unittest
 from agent.agent import GAME_MODE_ADDR, HyruleAgent
 from agent.sni.hud_text import (
     HUD_BUFFER_ADDR, HUD_FLAG_ADDR, HUD_COLS,
-    LETTER_BASE, DIGIT_BASE, SPACE_WORD,
-    HudText, char_word, encode_text,
+    LETTER_BASE, DIGIT_BASE, SPACE_WORD, SCROLL_HOLD_S, SCROLL_STEP_S,
+    HudText, char_word, encode_text, encode_words,
 )
 from tests.test_effects import MemoryTransport, Socket
 
@@ -45,15 +45,45 @@ class HudTextTests(unittest.TestCase):
         return t, HudText(t, row=row, col=col, width=width, seconds=seconds)
 
     def test_draw_writes_strip_and_sets_nmi_flag(self):
-        t, hud = self.hud()
-        hud.show("LAMP STOLEN FROM BILL")
+        t, hud = self.hud(width=21)
+        hud.show("LAMP STOLEN FROM BILL")                     # fits exactly
         hud.tick(now=100.0)
         self.assertEqual(t.memory[HUD_FLAG_ADDR], 1)          # $7E0016 set
-        expected = encode_text("LAMP STOLEN FROM BILL", 10)
-        self.assertEqual(bytes(t.read_memory(hud.addr, size=20)), expected)
+        expected = encode_text("LAMP STOLEN FROM BILL", 21)
+        self.assertEqual(bytes(t.read_memory(hud.addr, size=42)), expected)
         # strip sits inside HUD row 4
         row4 = HUD_BUFFER_ADDR + 4 * HUD_COLS * 2
         self.assertTrue(row4 <= hud.addr < row4 + HUD_COLS * 2)
+
+    def test_long_message_marquee_scrolls(self):
+        t, hud = self.hud(width=4, seconds=4.0)
+        hud.show("ABCDEF")                                    # 6 chars in a 4 strip
+        hud.tick(now=100.0)
+        self.assertEqual(bytes(t.read_memory(hud.addr, size=8)),
+                         b"".join(encode_words("ABCD")))      # head first
+        hud.tick(now=100.0 + SCROLL_HOLD_S)                   # first shift due
+        self.assertEqual(bytes(t.read_memory(hud.addr, size=8)),
+                         b"".join(encode_words("BCDE")))
+        hud.tick(now=100.0 + SCROLL_HOLD_S + SCROLL_STEP_S)
+        self.assertEqual(bytes(t.read_memory(hud.addr, size=8)),
+                         b"".join(encode_words("CDEF")))      # tail reached
+        hud.tick(now=100.0 + SCROLL_HOLD_S + 5 * SCROLL_STEP_S)
+        self.assertEqual(bytes(t.read_memory(hud.addr, size=8)),
+                         b"".join(encode_words("CDEF")))      # holds the tail
+
+    def test_partial_game_write_is_merged_into_restore(self):
+        t, hud = self.hud(width=4, seconds=2.0)
+        t.write_memory(hud.addr, bytes([0x7F, 0x20] * 4))     # original blanks
+        hud.show("ABCD")
+        hud.tick(now=100.0)
+        # the game re-stamps ONLY cell 2 (e.g. key counter area)
+        t.write_memory(hud.addr + 4, bytes([0x7F, 0x00]))
+        hud.tick(now=101.0)                                   # merge + reassert
+        self.assertEqual(bytes(t.read_memory(hud.addr, size=8)),
+                         b"".join(encode_words("ABCD")))      # message back
+        hud.tick(now=103.0)                                   # expiry
+        self.assertEqual(words(t, hud.addr, 4),
+                         [0x207F, 0x207F, 0x007F, 0x207F])    # game's cell kept
 
     def test_expiry_restores_the_original_cells(self):
         t, hud = self.hud(width=4, seconds=2.0)
@@ -109,7 +139,9 @@ class AgentHudIntegrationTests(unittest.TestCase):
         agent._poll_once()
         self.assertEqual(t.memory.get(HUD_FLAG_ADDR), 1)
         strip = bytes(t.read_memory(agent.hud.addr, size=agent.hud.width * 2))
-        self.assertEqual(strip, encode_text("Lamp stolen from Bill", agent.hud.width))
+        # 21 chars in a 20-wide strip -> marquee starts at the head
+        head = b"".join(encode_words("Lamp stolen from Bill")[:agent.hud.width])
+        self.assertEqual(strip, head)
 
     def test_hud_is_not_touched_outside_playable_modes(self):
         t = MemoryTransport()
