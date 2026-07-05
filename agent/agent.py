@@ -21,6 +21,7 @@ import websocket  # websocket-client
 from shared.items import ITEMS, BY_KEY, discovered_level
 from shared import protocol as P
 from .effects import Effects
+from .sni.hud_text import HudText
 from .sni.memory_constants import MEMORY_ADDRESSES, OUT_OF_GAME_MODES, PLAYABLE_MODES
 from .sni.item_effects import ABILITY_ADDR, RUN_ABILITY_MASK
 
@@ -39,7 +40,7 @@ _TRACKED_SIZE = _TRACKED_ADDRS[-1] - _TRACKED_START + 1
 
 class HyruleAgent:
     def __init__(self, transport, server_ws_url, room, user_id, player_token,
-                 poll_interval=1.0, on_notify=None):
+                 poll_interval=1.0, on_notify=None, hud_text=True):
         self.t = transport
         self.fx = Effects(transport)
         self.url = server_ws_url
@@ -51,6 +52,9 @@ class HyruleAgent:
         # server notifications even when the transport has no OSD (Snes9x-NWA,
         # SNI/hardware — only RetroArch can draw on-screen messages itself).
         self.on_notify = on_notify
+        # true in-game messages: rendered on the HUD strip via WRAM writes
+        # (works on every transport, no ROM patch — see sni/hud_text.py)
+        self.hud = HudText(transport) if hud_text else None
 
         self.ws = None
         self._ws_ready = threading.Event()
@@ -118,6 +122,8 @@ class HyruleAgent:
                 self.on_notify(text)       # desktop-app toast (works on any transport)
             except Exception as e:
                 logger.debug("notify callback failed: %s", e)
+        if self.hud:
+            self.hud.show(text)            # in-game HUD strip (drawn by the poll loop)
         show = getattr(self.t, "show_message", None)
         if show and self.t.connected:
             try:
@@ -233,6 +239,8 @@ class HyruleAgent:
             # server re-push ownership so the game matches the ledger again.
             self._resync("Save (re)loaded")
         self._flush_pending()
+        if self.hud:
+            self.hud.tick()   # only while playable — the HUD buffer is live here
 
         # All inventory bytes occupy one small contiguous SRAM-mirror range.
         # Reading it once cuts RetroArch UDP traffic from ~23 round trips per
@@ -305,6 +313,8 @@ class HyruleAgent:
         with self._lock:
             self._baseline.clear()
             self._expected.clear()
+        if self.hud:
+            self.hud.reset()   # the game rebuilt the HUD; our snapshot is void
         if self.ws and self._ws_ready.is_set():
             try:
                 self.ws.send(json.dumps({"type": P.RESYNC}))

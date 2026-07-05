@@ -24,11 +24,14 @@ ALTTPRFollowerInjector). RAM addresses and game-mode gating follow the
 
 **On-screen messages.** Every item move sends the involved players a short
 personal message — *"Lamp stolen from Bill"*, *"Hot potato - Bow is yours"*,
-*"Sword borrowed by Ted (60s)"*, *"Host gave you Sword (Gold)"*. On RetroArch it
-draws on the emulator's own OSD (`SHOW_MSG`); on every transport it also appears
-as a toast + activity line in the desktop app (Snes9x-NWA and SNI/hardware have
-no OSD, and true in-game text would need a ROM patch — the dialog font isn't
-resident in VRAM, per the reference docs).
+*"Sword borrowed by Ted (60s)"*, *"Host gave you Sword (Gold)"*. They render
+**inside the game itself**, on the HUD strip, with no ROM patch: the agent
+writes the message as tilemap words into the HUD buffer (`$7EC700`) using the
+game's own resident uppercase font (the same tiles that draw "LIFE") and sets
+the HUD-upload flag (`$7E0016`), so the game's NMI displays it — on any
+transport, including SNI/real hardware. Messages also appear on RetroArch's
+OSD and as a toast + activity line in the desktop app. Placement is
+verifiable/tunable with `python -m tools.hud_text_test "YOUR TEXT"`.
 
 **Save-aware syncing.** The agent only writes items while a save is actually
 loaded (`MODE` `$7E0010` in a playable module) — grants/revokes that arrive at

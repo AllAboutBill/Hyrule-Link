@@ -36,7 +36,8 @@ class MemoryTransport:
     def write_memory(self, address, data, domain="WRAM"):
         if not self.writable:
             return False
-        self.memory[address] = data[0]
+        for i, b in enumerate(data):
+            self.memory[address + i] = b
         return True
 
     def show_message(self, text):
