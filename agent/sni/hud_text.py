@@ -69,8 +69,8 @@ DEFAULT_ROW = 4              # bottom HUD row — measured free of game writes
 DEFAULT_COL = 5              # cols 0-4 belong to the item box frame
 DEFAULT_WIDTH = 20           # cols 5-24; cols 25-26 are game-owned (keys/floor)
 DEFAULT_SECONDS = 4.0        # static display time (scroll time is added)
-SCROLL_HOLD_S = 1.0          # show the head of a long message before scrolling
-SCROLL_STEP_S = 0.35         # one 1-char shift per this interval
+SCROLL_HOLD_S = 1.5          # show the head of a long message before scrolling
+SCROLL_STEP_S = 0.75         # one 1-char shift per this interval (~2 ticks)
 MAX_QUEUE = 6
 
 
