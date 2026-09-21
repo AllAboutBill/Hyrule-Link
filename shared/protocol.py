@@ -1,5 +1,5 @@
 """
-protocol.py — WebSocket message contract between the HyruleLink server, the
+protocol.py — WebSocket message contract between the BombosSwap server, the
 player agents, and the browser UIs. Plain JSON dicts with a `type` field.
 
 Transport model: agents and UIs both *dial out* to the server (works behind

@@ -25,7 +25,7 @@ CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
                          "cache", "sprites")
 CATALOG_FILE = os.path.join(CACHE_DIR, "catalog.json")
 CATALOG_TTL = 7 * 24 * 3600          # refresh the sprite list weekly
-_UA = {"User-Agent": "HyruleLink (github.com/AllAboutBill)"}
+_UA = {"User-Agent": "BombosSwap (github.com/AllAboutBill)"}
 
 RANDOM_SPRITE = "Random"             # picker sentinel — resolved at patch time
 

@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  HyruleLink - deploy to the droplet.               bash deploy/deploy.sh
+#  BombosSwap - deploy to the droplet.               bash deploy/deploy.sh
 # =============================================================================
-#  /opt/hyrulelink is a git checkout of master and the droplet pulls from
-#  GitHub, so push master first. ONE ssh session does: refuse on local
-#  modifications -> fetch -> fast-forward to origin/master -> pip (only if
-#  requirements.txt changed) -> unit (only if it changed; Environment= lines
-#  the live unit has and the repo unit lacks are kept) -> restart ->
-#  /api/health -> on any failure, roll code and unit back and restart again.
+#  The service, its folder and its files kept the name from before the
+#  rename (hyrulelink). /opt/hyrulelink is a git checkout of master and the
+#  droplet pulls from GitHub, so push master first. ONE ssh session does:
+#  refuse on local modifications -> fetch -> fast-forward to origin/master ->
+#  pip (only if requirements.txt changed) -> unit (only if it changed;
+#  Environment= lines the live unit has and the repo unit lacks are kept) ->
+#  restart -> /api/health -> on any failure, roll code and unit back and
+#  restart again.
 #
 #  NEVER touches .env, server/hyrulelink.db*, server/operator.key, nginx or
 #  any other service: git leaves ignored files alone and nothing here names
@@ -35,7 +37,7 @@ MODE="${1:-ship}"
 
 case "$MODE" in
   ship|--check|--rollback) ;;
-  -h|--help) sed -n '3,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '3,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) echo "usage: bash deploy/deploy.sh [--check | --rollback]" >&2; exit 2 ;;
 esac
 
@@ -171,7 +173,7 @@ local_refs() {  # what this PC thinks it pushed; no network
 }
 
 if [ "$MODE" = "--check" ]; then
-  echo "HyruleLink on $HOST:/opt/hyrulelink (read-only)"
+  echo "BombosSwap on $HOST:/opt/hyrulelink (read-only)"
   local_refs
   retry_ssh <<'EOF'
 check() {
@@ -208,9 +210,14 @@ check() {
   if [ -s server/operator.key ]; then say "operator: server/operator.key present, mode $(stat -c %a server/operator.key)"
   else say "operator: no server/operator.key (operator routes answer 404)"; fi
   say "          /api/operator/rooms answers $(curl -s -o /dev/null -m 3 -w '%{http_code}' http://127.0.0.1:$PORT/api/operator/rooms) (404 off, 403 key set)"
-  if grep -q 'location ^~ /hyrulelink/' /etc/nginx/sites-available/billogna-sites.conf 2>/dev/null
-  then say "nginx:    /hyrulelink/ is in billogna-sites.conf"
-  else say "nginx:    /hyrulelink/ not installed yet (deploy/nginx_install.py)"; fi
+  local conf=/etc/nginx/sites-available/billogna-sites.conf
+  if grep -qF 'location ^~ /bombosswap/' "$conf" 2>/dev/null; then
+    if grep -qF 'rewrite ^/hyrulelink/(.*)$ /bombosswap/$1 permanent;' "$conf"
+    then say "nginx:    /bombosswap/ is in billogna-sites.conf; /hyrulelink/ redirects to it"
+    else say "nginx:    /bombosswap/ is in billogna-sites.conf, but /hyrulelink/ does not redirect to it"; fi
+  elif grep -qF 'location ^~ /hyrulelink/' "$conf" 2>/dev/null
+  then say "nginx:    only the old /hyrulelink/ proxy; /bombosswap/ not installed yet (deploy/nginx_install.py)"
+  else say "nginx:    /bombosswap/ not installed yet (deploy/nginx_install.py)"; fi
   say "state:    $(ls -l .env server/hyrulelink.db* 2>/dev/null | awk '{printf "%s %s  ", $NF, $5}')"
 }
 check </dev/null
@@ -219,7 +226,7 @@ EOF
 fi
 
 if [ "$MODE" = "--rollback" ]; then
-  echo "HyruleLink on $HOST:/opt/hyrulelink: rolling back to .deploy-prev"
+  echo "BombosSwap on $HOST:/opt/hyrulelink: rolling back to .deploy-prev"
   retry_ssh <<'EOF'
 rollback() {
   setup; lock; log_to_file
@@ -252,7 +259,7 @@ EOF
   exit $?
 fi
 
-echo "HyruleLink -> $HOST:/opt/hyrulelink (ships origin/master from GitHub)"
+echo "BombosSwap -> $HOST:/opt/hyrulelink (ships origin/master from GitHub)"
 local_refs
 retry_ssh <<'EOF'
 fail_ship() {

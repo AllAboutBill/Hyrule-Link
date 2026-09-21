@@ -1,5 +1,5 @@
 """
-agent.py — the local HyruleLink player agent.
+agent.py — the local BombosSwap player agent.
 
 Sits next to one player's emulator (EmuNWA/RetroArch) or FXPak/SD2SNES and:
   * polls WRAM to detect items the player picks up in their own world,

@@ -21,6 +21,6 @@ if __name__ == "__main__":
             webbrowser.open(f"http://localhost:{a.port}/")
         threading.Thread(target=_open, daemon=True).start()
 
-    print(f"\n  HyruleLink server -> http://localhost:{a.port}/")
+    print(f"\n  BombosSwap server -> http://localhost:{a.port}/")
     print("  Share that link (or your machine's IP) with the other players.\n")
     uvicorn.run("server.app:app", host=a.host, port=a.port, reload=a.reload)

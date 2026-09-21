@@ -1,10 +1,15 @@
-# HyruleLink: interfaces
+# BombosSwap: interfaces
 
 A reference, not an introduction. Server times are Unix seconds. Paths are
-relative to the site root: `https://www.billogna.lol/hyrulelink/` or
+relative to the site root: `https://www.billogna.lol/bombosswap/` or
 `https://hyrulelink.billogna.lol/` (one server behind both), or
-`http://localhost:5019/` here. Message names are the constants in
-`shared/protocol.py`.
+`http://localhost:5019/` here. `https://www.billogna.lol/hyrulelink/<path>?<query>`,
+the address from before the rename to BombosSwap (2026-09-21), answers 301 to
+the same path and query under `/bombosswap/`; nginx does that, the server never
+sees it. Message names are the constants in `shared/protocol.py`. Names that
+say hyrulelink or `hl` below (storage keys, the Web Lock, the session header
+and cookie, environment variables) kept the old name on purpose: renaming them
+would lose seats or break the desktop app.
 
 ## Identity
 
@@ -278,7 +283,7 @@ a, b, c?, d?: <player names>}`, with the caller's address as
 budgets rooms per address); `POST api/seat/<seat a's token> {close: true,
 force: true}` to close (seat `a` made the room, so only it may); `GET
 api/seat/<seat a's token>` to see whether it still exists. Deleting a
-HyruleLink room (operator, Discord admin, the 14-day prune) closes its
+BombosSwap room (operator, Discord admin, the 14-day prune) closes its
 QuakeCast room too. A server restart forgets the cams; the QuakeCast room then
 ends by itself.
 
@@ -286,7 +291,7 @@ ends by itself.
 
 The page reaches the game through SNI or QUsb2Snes (usb2snes) at
 `ws://localhost:23074`, then `ws://localhost:8080`. The client name is
-`HyruleLink`. Opcodes used: `AppVersion`, `Name`, `DeviceList`, `Attach`,
+`BombosSwap`, the name SNI or QUsb2Snes lists the page under. Opcodes used: `AppVersion`, `Name`, `DeviceList`, `Attach`,
 `Info`, `GetAddress`, `PutAddress`; the first device listed is used. An
 address is `0xF50000` + the WRAM offset (`$7E0000` = `0xF50000`). One request
 at a time; 2.5 s to connect, 3 s per answer, and a timeout closes the socket.

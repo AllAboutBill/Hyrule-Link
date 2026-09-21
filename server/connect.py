@@ -7,7 +7,7 @@ own service with its own rooms; this file only uses its public HTTP API
 (RaceConnect docs/CONTRACT.md), so neither project imports the other and
 either keeps working with the other switched off. Copied in shape from
 EtherNet's server/ethernet/connect.py, with urllib in a thread in place of
-aiohttp (no new server dependency) and no clock: HyruleLink has no race.
+aiohttp (no new server dependency) and no clock: BombosSwap has no race.
 
 What the host's one click does:
 
@@ -51,7 +51,7 @@ SEAT_IDS = ("a", "b", "c", "d")      # QuakeCast seats two, and up to four when 
 MIN_SEATS, MAX_SEATS = 2, len(SEAT_IDS)
 TIMEOUT_S = 10
 CHECK_EVERY_S = 60.0                 # at most one "is it still there?" per room
-USER_AGENT = "HyruleLink (https://hyrulelink.billogna.lol)"
+USER_AGENT = "BombosSwap (https://hyrulelink.billogna.lol)"
 ENDED = "ended"                      # cams.error once QuakeCast says the room is gone
 
 _loose = set()                       # background tasks, held until they finish
@@ -99,7 +99,7 @@ def create(title: str, names, client_ip: str = "") -> dict:
     -> {"room_id", "seats": {"a": {"token", "url"}, "b": {...}, ...}}"""
     names = [str(n)[:24] for n in names][:MAX_SEATS]
     want = SEAT_IDS[:len(names)]
-    ask = {"name": str(title or "HyruleLink")[:60], "seats": len(names)}
+    ask = {"name": str(title or "BombosSwap")[:60], "seats": len(names)}
     ask.update(dict(zip(want, names)))
     headers = {}
     if client_ip and _loopback(API):
@@ -175,7 +175,7 @@ def _background(fn, *args):
 
 def end_in_background(entry):
     """Close the QuakeCast room behind `entry` (a hub.cams value), if it is
-    still open there. Used when a HyruleLink room is deleted or replaced."""
+    still open there. Used when a BombosSwap room is deleted or replaced."""
     if not entry or entry.get("error") or not enabled():
         return
     try:

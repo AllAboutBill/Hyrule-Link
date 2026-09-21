@@ -1,6 +1,12 @@
-# HyruleLink
+# BombosSwap
 
-**https://www.billogna.lol/hyrulelink/** and **https://hyrulelink.billogna.lol**
+Formerly HyruleLink.
+
+**https://www.billogna.lol/bombosswap/** and **https://hyrulelink.billogna.lol**
+
+Bombos like the medallion, swap because items change hands. The third
+medallion app on billogna.lol, beside [EtherNet](https://www.billogna.lol/ethernet/)
+(Ether) and [QuakeCast](https://www.billogna.lol/connect/) (Quake).
 
 Every player their own seed. One shared inventory.
 
@@ -13,9 +19,19 @@ game changes live.
 
 No install beyond SNI, no accounts. The room link is the key.
 
-HyruleLink reads inventory bytes and writes items. That is why it is its own
+BombosSwap reads inventory bytes and writes items. That is why it is its own
 app and not an EtherNet mode: EtherNet's rule is that only the module byte
 leaves a racer's PC.
+
+**The old name stays in the code.** The repo folder, the packages and
+modules, `hyrulelink.service`, `/opt/hyrulelink`, the `HYRULELINK_*`
+variables, `server/hyrulelink.db`, the browser's `hyrulelink.*` storage keys,
+`web/css/hyrulelink.css`, the GitHub repo (`AllAboutBill/Hyrule-Link`) and the
+subdomain `hyrulelink.billogna.lol` (which every installed desktop app points
+at) kept it: they name what the code does, and renaming them would break
+installs, seats or the server. https://www.billogna.lol/hyrulelink/ redirects
+to `/bombosswap/`, path and query kept, so invite links from before the
+rename still work.
 
 ## What it does
 
@@ -27,6 +43,7 @@ leaves a racer's PC.
 | **In-game messages** | Lines on the HUD strip in the game's own font, with no ROM patch: `SWORD TAKEN FROM ANA`. One switch per browser. |
 | **Modes** | Normal, Hot Potato, Chaos, and Custom: a rule editor with seven presets. The host picks. |
 | **Host controls** | Rename, mode, cooldown, custom rules, mark an item found or set its holder for any player, remove a player, reset progression. |
+| **Cams** | The host can open [QuakeCast](https://www.billogna.lol/connect/) for two to four players: each gets a private seat link that puts their cam, game and tracker into the others' OBS. |
 | **Rooms** | "Your rooms on this browser" on the front page is the way back in; "Live rooms" lists the rooms anyone can watch. A room nobody uses for 14 days is removed. `operator.html` lists and deletes every room, behind a key. |
 | **Desktop app** | The Windows app from before the browser client still works against the same server and rooms: seed generation, sprites, emulator launch, direct NWA and RetroArch links, a server of your own. |
 
@@ -37,13 +54,13 @@ leaves a racer's PC.
 | [docs/USING.md](docs/USING.md) | You play or host. A co-op start to finish, linking a game, what the page reads and writes, modes, the desktop app. |
 | [docs/DEVELOPING.md](docs/DEVELOPING.md) | You are changing the code. Local run, the fake game, tests, the hard constraints, the traps already paid for. |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | The exact interfaces: routes, websocket messages, the room document, the game memory. |
-| [deploy/README.md](deploy/README.md) | It is on the droplet: what runs where, how to deploy, check and roll back. |
-| [docs/BROWSER_PLAN.md](docs/BROWSER_PLAN.md) | The record of how the browser client was built, package by package. |
+| [deploy/README.md](deploy/README.md) | It is on the droplet: what runs where, how to deploy, check and roll back, and the rename's one-time nginx step. |
+| [docs/BROWSER_PLAN.md](docs/BROWSER_PLAN.md) | The record of how the browser client was built, package by package, under the old name. |
 
 ## How it moves
 
 ```
-player's browser  -- /ws "ui" ------>  HyruleLink server
+player's browser  -- /ws "ui" ------>  BombosSwap server
    |              -- /ws "agent" --->  rooms, the ledger, the rules
    |
    +--- ws://localhost:23074 ---> SNI / QUsb2Snes ---> emulator or FXPak Pro
@@ -80,12 +97,12 @@ By hand, from the repo root in Git Bash:
 
 ```
 server/       app.py (FastAPI: REST, /ws, web/ at the root), ledger.py (who holds what, the rules,
-              the connection hub), operator.py (the operator gate), db.py (sqlite), auth.py (Discord,
-              desktop app only), rate_limit.py, names.py
+              the connection hub), connect.py (QuakeCast cams), operator.py (the operator gate),
+              db.py (sqlite), auth.py (Discord, desktop app only), rate_limit.py, names.py
 shared/       items.py (the catalog), protocol.py (message names), rules.py (rule defaults, presets)
 web/          index.html (front door), room.html (the room), operator.html
 web/js/       items.js (generated), effects.js, agent.js (the browser agent), hud.js, snes.js,
-              game.js, room.js, home.js, operator.js, claim-policy.js
+              game.js, room.js, cams.js, home.js, operator.js, claim-policy.js, intro.js
 agent/        the desktop app's agent: agent.py, effects.py, sni/ (links, item writes, HUD), romtools/
 agent_gui.py  the desktop app (Tk)
 tools/        fake_snes.py (a stand-in game), coop_check.js (a two-player round, no browser),
@@ -98,15 +115,17 @@ docs/         USING, DEVELOPING, PROTOCOL, BROWSER_PLAN
 
 ## What is proven, and what is not
 
-Proven 2026-09-21, on this PC:
+Proven 2026-09-21, on this PC, under the name HyruleLink (the rename changed
+words and the address, not what the code does):
 
 - **The test suite.** Server routes, including the desktop app's frozen
   shapes; websocket hellos for all three roles; the operator gate; the ledger
   and rules; the Python agent's item writes; the fake bridge; Python 3.10
-  syntax; `items.js` against the catalog; the page URL rules. Node units for
-  `hud.js`, `snes.js`, `items.js`, `effects.js` and `agent.js`, and a replay
-  of every grant and revoke through the Python and the JS item writers, which
-  make the same reads and writes in the same order.
+  syntax; `items.js` against the catalog; the page URL rules; the nginx step
+  from each starting state. Node units for `hud.js`, `snes.js`, `items.js`,
+  `effects.js` and `agent.js`, and a replay of every grant and revoke through
+  the Python and the JS item writers, which make the same reads and writes in
+  the same order.
 - **A two-player round with no browser** (`tests/test_coop_e2e.py` running
   `tools/coop_check.js`): two fake games, the real server, the page's own game
   modules under node. Seven steps, each within 3 s: (1) a find; (2) a steal by
@@ -137,14 +156,20 @@ Proven 2026-09-21, on this PC:
   closing the linked tab let the other take over in about 130 ms, with finds
   still reaching the board.
 
-- **Live, 2026-09-21.** Deployed to the droplet and answering at both
-  https://www.billogna.lol/hyrulelink/ and https://hyrulelink.billogna.lol.
-  `tools/coop_check.js --server https://www.billogna.lol/hyrulelink` ran the
-  whole seven-step round against the live server through the path prefix and
-  `wss`, with two fake games on a PC at home: PASS in 12.6 s. A host opened
-  QuakeCast cams for two players on the live QuakeCast and closed them again
-  (its room count went 0, 1, 0), and no seat link appeared in any reply.
-  EtherNet and QuakeCast answered as before.
+- **Live, 2026-09-21, as HyruleLink.** Deployed to the droplet and answering
+  at both https://www.billogna.lol/hyrulelink/ and
+  https://hyrulelink.billogna.lol. `tools/coop_check.js --server
+  https://www.billogna.lol/hyrulelink` ran the whole seven-step round against
+  the live server through the path prefix and `wss`, with two fake games on a
+  PC at home: PASS in 12.6 s. A host opened QuakeCast cams for two players on
+  the live QuakeCast and closed them again (its room count went 0, 1, 0), and
+  no seat link appeared in any reply. EtherNet and QuakeCast answered as
+  before.
+
+Not proven yet for the rename: `/bombosswap/` and the `/hyrulelink/` redirect
+live. The nginx step ran only against a copy of the live file, with nginx
+stubbed (see deploy/README.md). After it ships, the same round runs with
+`--server https://www.billogna.lol/bombosswap`.
 
 Proven elsewhere and relied on: EtherNet's `snes.js` and `hud.js`, which
 these are copies of, wrote HUD lines into a real snes9x-nwa through the real

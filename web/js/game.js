@@ -1,4 +1,4 @@
-/* HyruleLink - this browser as a player's game link.
+/* BombosSwap - this browser as a player's game link.
  *
  * Glue between three things that do not know each other:
  *
@@ -141,7 +141,7 @@
 
     snes = new Snes({
       urls: opts.urls,
-      name: 'HyruleLink',
+      name: 'BombosSwap',
       onStatus: function () {
         if (stopped) return;
         linkChanged();

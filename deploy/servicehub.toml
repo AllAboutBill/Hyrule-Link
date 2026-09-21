@@ -1,6 +1,6 @@
 [[service]]
 id      = "hyrulelink"
-name    = "HyruleLink co-op"
+name    = "BombosSwap co-op"
 host    = "droplet"
 kind    = "web"
 port    = 5019
@@ -8,4 +8,4 @@ url     = "https://hyrulelink.billogna.lol/api/health"
 health  = "http"
 restart = "systemctl restart hyrulelink.service"
 update  = "Push master, then F:\\HyruleLink\\deploy\\deploy.sh (bash, Git Bash). --check to look, --rollback to undo. /opt/hyrulelink is a git checkout; .env and server/hyrulelink.db are git-ignored and survive."
-notes   = "Shared-inventory co-op for ALTTPR. Browser client at https://www.billogna.lol/hyrulelink/ and https://hyrulelink.billogna.lol (the desktop app points at the subdomain). FastAPI + uvicorn as root at /opt/hyrulelink:5019; nginx hyrulelink.conf (subdomain) and location ^~ /hyrulelink/ in billogna-sites.conf."
+notes   = "BombosSwap (formerly HyruleLink): shared-inventory co-op for ALTTPR. Browser client at https://www.billogna.lol/bombosswap/ and https://hyrulelink.billogna.lol (the desktop app points at the subdomain); /hyrulelink/ on www redirects to /bombosswap/. The service, folder, id and files keep the hyrulelink name. FastAPI + uvicorn as root at /opt/hyrulelink:5019; nginx hyrulelink.conf (subdomain) and location ^~ /bombosswap/ plus the /hyrulelink/ redirect in billogna-sites.conf."

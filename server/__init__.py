@@ -1,1 +1,1 @@
-"""HyruleLink coordination server."""
+"""BombosSwap coordination server."""

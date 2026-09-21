@@ -1,4 +1,8 @@
-# Developing HyruleLink
+# Developing BombosSwap
+
+BombosSwap was HyruleLink until 2026-09-21. Code names kept the old name
+(the folder, packages, the service, `HYRULELINK_*`, the database, the
+storage keys, the stylesheet's file name, the subdomain); see `CLAUDE.md`.
 
 Commands are for Git Bash, from the repo root. `Install.cmd` makes `.venv`;
 everything runs from it.
@@ -103,7 +107,7 @@ room opened from this PC counts against 127.0.0.1: add
 ## Tests
 
 ```bash
-.venv/Scripts/python.exe -m unittest discover -s tests         # everything: server, agents, fake, node units, the two-player round
+.venv/Scripts/python.exe -m unittest discover -s tests         # everything: server, agents, fake, node units, the two-player round, the nginx step
 node tests/web/units.js                                        # just the JS units: hud, snes, items, effects, agent
 node tests/test_claim_policy.js
 .venv/Scripts/python.exe -m unittest tests.test_coop_e2e -v    # the two-player round alone
@@ -143,8 +147,12 @@ test and `compileall`.
 - **Relative URLs everywhere in `web/`.** No leading slash in `href`, `src`,
   `action`, `fetch` or `new URL`, and no `url(/` in CSS; the websocket is
   `new URL('ws', location.href)`. The site runs at
-  `https://www.billogna.lol/hyrulelink/` (nginx strips the prefix) as well as
-  at `https://hyrulelink.billogna.lol`. `tests/test_web_js.py` enforces it.
+  `https://www.billogna.lol/bombosswap/` (nginx strips the prefix; the old
+  `/hyrulelink/` redirects there) as well as at
+  `https://hyrulelink.billogna.lol`. `tests/test_web_js.py` enforces it.
+- **No page shows the old name.** Titles, text, `alt` and `title` say
+  BombosSwap; file names, storage keys and comments may say hyrulelink.
+  `tests/test_web_js.py` checks every `web/*.html`.
 - **The desktop app's routes are frozen.** New fields and new routes only;
   never rename, remove or reshape: `GET api/me` (header `X-HL-Session`),
   `POST auth/device/start`, `GET auth/device/poll?pair=`, `GET api/my-rooms`,
@@ -286,7 +294,7 @@ test and `compileall`.
   the subdomain's nginx block. Nothing may use it; a test checks.
 - **`request.base_url` assumes the subdomain.** `auth/device/start` builds its
   `login_url` from it, and `auth/callback` redirects to `/`. Under
-  `/hyrulelink/` both would point at billogna.lol itself. Only the desktop app
+  `/bombosswap/` both would point at billogna.lol itself. Only the desktop app
   uses them, and it uses the subdomain.
 - **`you` is null for a watcher, and `owner` is null for an unheld item**, so
   `owner === you` is true for both. The old page showed watchers every unheld
@@ -323,7 +331,7 @@ test and `compileall`.
 | fake game (`tools/fake_snes.py`) | EtherNet's `tools/fake_snes.py`, plus the item-poke control API |
 | two-player harness (`tools/coop_check.js`) | the shape of EtherNet's `tools/hud_check.js` |
 | look, fonts, front door, operator page and gate | EtherNet's `ethernet.css` tokens and components, its bundled fonts (StreamStudio's), `index.html`, `operator.html` and its server's operator key rules |
-| the mark (`web/img/hookshot.svg`, `mark.svg`) | the Hookshot item sprite, turned into a pixel-exact SVG by `tools/make_mark.py` (adapted from EtherNet's) |
+| the mark (`web/img/bombos.svg`, the favicon `mark.svg`) and the intro (`web/js/intro.js`) | the Bombos medallion, made for the rename on 2026-09-21; `tools/make_mark.py` (adapted from EtherNet's) draws the pixel mark. Until then the mark was the Hookshot item sprite (`web/img/hookshot.svg`). |
 | RAM addresses, game modes | [ALTTPR-REFERENCE](https://github.com/AllAboutBill/ALTTPR-REFERENCE), z3randomizer, and the tools the agent was built from (TwitchBot SNI, AlttprHelper, ALTTPRFollowerInjector) |
 | item sprites (`web/items/`) | the ALTTPR community tracker |
 

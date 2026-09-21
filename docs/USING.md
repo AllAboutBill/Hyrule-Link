@@ -1,4 +1,9 @@
-# Using HyruleLink
+# Using BombosSwap
+
+BombosSwap was called HyruleLink until 2026-09-21. The site is at
+https://www.billogna.lol/bombosswap/; links to the old
+https://www.billogna.lol/hyrulelink/ address go on to it, and seats saved in
+your browser carry over.
 
 ## A co-op, start to finish
 
@@ -196,7 +201,7 @@ from the *Cams* row under the Game row: tick the players, *Open cams*.
   ones an hour per address. When it says no, the host sees why.
 
 The row is only there when the server is set up with QuakeCast. There is no
-race clock: HyruleLink is co-op.
+race clock: BombosSwap is co-op.
 
 ## Watching
 
@@ -214,8 +219,9 @@ nobody uses for 14 days is removed.
 ## The desktop app
 
 The Windows app (`Install.cmd` once, then `Play.cmd`) is the other way to be
-in a room. Same server (it points at `https://hyrulelink.billogna.lol`), same
-rooms, same board; a desktop player and browser players can share a room.
+in a room. Same server (it points at `https://hyrulelink.billogna.lol`, which
+kept its name through the rename), same rooms, same board; a desktop player
+and browser players can share a room.
 Use it when you want:
 
 - a seed made for you: *Generate seed*, with sprite, palette shuffle and

@@ -2,7 +2,7 @@
 auth.py — Discord OAuth2 login + signed session cookies.
 
 Admin rights come from your Discord server: the guild **owner** and anyone with a
-configured **mod role** become HyruleLink global admins (delete/kick/manage any
+configured **mod role** become BombosSwap global admins (delete/kick/manage any
 room). There are no passwords or shared keys — just "Login with Discord".
 
 Config (env / .env), reusing your existing Discord application is fine:
@@ -27,7 +27,7 @@ import urllib.request
 DISCORD_API = "https://discord.com/api"
 # Discord's CDN (Cloudflare) blocks the default Python-urllib agent with error
 # 1010 — every API call MUST send a real User-Agent.
-USER_AGENT = "HyruleLink (https://hyrulelink.billogna.lol, 1.0)"
+USER_AGENT = "BombosSwap (https://hyrulelink.billogna.lol, 1.0)"
 SCOPES = "identify guilds guilds.members.read"
 SESSION_COOKIE = "hl_session"
 SESSION_TTL = 7 * 86400          # 1 week
@@ -139,7 +139,7 @@ def _get(url: str, token: str):
 
 
 def fetch_profile(code: str) -> dict:
-    """Exchange the OAuth code and decide if this user is a HyruleLink admin
+    """Exchange the OAuth code and decide if this user is a BombosSwap admin
     (guild owner or holds a configured mod role)."""
     tok = _post_form(f"{DISCORD_API}/oauth2/token", {
         "client_id": DISCORD_CLIENT_ID,

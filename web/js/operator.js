@@ -1,4 +1,4 @@
-/* HyruleLink - the operator page: every room, who is in it, and Delete.
+/* BombosSwap - the operator page: every room, who is in it, and Delete.
  *
  * The key travels as the X-Operator-Key header on each call (never in a URL:
  * nginx logs URLs) and is kept in this browser's localStorage

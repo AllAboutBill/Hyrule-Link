@@ -1,16 +1,16 @@
 """The browser's pages and JavaScript: every file parses, the DOM-free units
 pass under node, nothing uses a leading-slash URL (the site is served under a
 path prefix as well as at a root), nothing is loaded from the old billogna.lol
-chrome or a font CDN, every page carries the billogna.lol bar, and the old
-aurora UI is gone. Skips the node parts when node is not installed.
-
-room.html is written by another package; its checks run once it exists.
+chrome or a font CDN, every page carries the billogna.lol bar with the three
+medallion apps in order, no page shows the name from before BombosSwap, and
+the old aurora UI is gone. Skips the node parts when node is not installed.
 """
 import json
 import re
 import shutil
 import subprocess
 import unittest
+from html.parser import HTMLParser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,8 +41,21 @@ RETIRED = ("app.js", "style.css", "nexus-bg.js", "pixel-canvas.js", "pixel-hover
 
 # Anything a page loads from next to itself must be there.
 LOCAL_ASSET = re.compile(r"""(?:src|href)=["']([^"'#?]+\.(?:css|js|svg|png|ico|woff2|ttf|jpg))["']""")
+# ...except these two: the BombosSwap mark and the intro come from the logo
+# package, built beside the rename. They are checked once they land.
+FROM_THE_LOGO_PACKAGE = ("img/bombos.svg", "js/intro.js")
 
 SITEBAR = re.compile(r"""<nav\b[^>]*\bclass=["']sitebar["'][^>]*>.*?</nav>""", re.S)
+SITEBAR_APP = re.compile(r"""<a\b([^>]*)>([^<]*)</a>""")
+# The three medallion apps, in the game's order: Bombos, Ether, Quake.
+SIBLINGS = (("BombosSwap", "./"), ("EtherNet", "https://www.billogna.lol/ethernet/"),
+            ("QuakeCast", "https://www.billogna.lol/connect/"))
+
+# The old name, however it is spaced or cased. Code names (css/hyrulelink.css,
+# the hyrulelink.* storage keys) keep it; nothing a reader sees may.
+OLD_NAME = re.compile(r"hyrule[\s_-]*link", re.I)
+# Attributes a reader sees or hears; href and src are not among them.
+READ_ATTRS = ("title", "alt", "aria-label", "placeholder", "content", "value", "label")
 
 
 def _run(*args, timeout=120):
@@ -56,6 +69,44 @@ def _pages():
 
 def _scripts():
     return sorted(WEB.glob("*.js")) + sorted(JS_DIR.glob("*.js"))
+
+
+class _ReaderText(HTMLParser):
+    """What a page shows or reads out: the attributes in READ_ATTRS, and the
+    text outside <script> and <style>, run together with the tags taken out
+    (so Hyrule<b>Link</b> reads as one word). Comments are left out."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.attrs, self.text, self._skip = [], [], 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style"):
+            self._skip += 1
+        self.attrs.extend(v for k, v in attrs if k in READ_ATTRS and v)
+
+    def handle_startendtag(self, tag, attrs):
+        self.attrs.extend(v for k, v in attrs if k in READ_ATTRS and v)
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style") and self._skip:
+            self._skip -= 1
+
+    def handle_data(self, data):
+        if not self._skip:
+            self.text.append(data)
+
+
+def _reader_text(page):
+    """[each read attribute ..., all the text]"""
+    p = _ReaderText()
+    p.feed(page)
+    p.close()
+    return p.attrs + ["".join(p.text)]
+
+
+def _old_names(page):
+    return [m.group(0) for s in _reader_text(page) for m in OLD_NAME.finditer(s)]
 
 
 @unittest.skipIf(NODE is None, "node is not installed")
@@ -108,6 +159,8 @@ class SourceTests(unittest.TestCase):
             for ref in LOCAL_ASSET.findall(path.read_text(encoding="utf-8")):
                 if re.match(r"(?:[a-z]+:|//)", ref):
                     continue
+                if ref in FROM_THE_LOGO_PACKAGE and not (WEB / ref).is_file():
+                    continue        # the logo package adds it
                 with self.subTest(page=path.name, ref=ref):
                     self.assertTrue((WEB / ref).is_file(), f"{path.name} loads {ref}, which is not in web/")
 
@@ -123,6 +176,48 @@ class SourceTests(unittest.TestCase):
                 for href in ("https://www.billogna.lol/", "https://www.billogna.lol/ethernet/",
                              "https://www.billogna.lol/connect/"):
                     self.assertIn(f'href="{href}"', bar.group(0))
+
+    def test_the_bar_lists_the_three_medallion_apps_in_order(self):
+        """BombosSwap (this site, ./), EtherNet, QuakeCast: the game's
+        medallion order, on every page."""
+        for name in PAGES:
+            page = (WEB / name).read_text(encoding="utf-8")
+            with self.subTest(name):
+                sibs = re.search(r"""<span class="sb-sibs">(.*?)</span>""", SITEBAR.search(page).group(0), re.S)
+                self.assertIsNotNone(sibs, f"{name}: no sb-sibs in the bar")
+                got = [(text.strip(), re.search(r'href="([^"]*)"', attrs).group(1))
+                       for attrs, text in SITEBAR_APP.findall(sibs.group(1))]
+                self.assertEqual(got, list(SIBLINGS))
+                here = SITEBAR_APP.findall(sibs.group(1))[0][0]
+                if name != "operator.html":
+                    self.assertIn('aria-current="page"', here)
+
+    def test_no_page_shows_the_old_name(self):
+        """Renamed BombosSwap on 2026-09-21. Comments, file names and storage
+        keys may still say hyrulelink; titles, text and alt text may not."""
+        for path in _pages():
+            page = path.read_text(encoding="utf-8")
+            with self.subTest(path.name):
+                self.assertTrue(any("BombosSwap" in s for s in _reader_text(page)),
+                                f"{path.name} never says BombosSwap")
+                self.assertEqual(_old_names(page), [], f"{path.name} shows the old name")
+
+    def test_the_old_name_check_catches_it(self):
+        page = ('<!-- HyruleLink --><title>Hyrule Link</title><link href="css/hyrulelink.css">'
+                '<script>var x = "HyruleLink";</script><img alt="HyruleLink" src="img/hyrulelink.svg">'
+                '<span class="word">Hyrule<b>Link</b></span><p>ok</p>')
+        self.assertEqual(_old_names(page), ["HyruleLink", "Hyrule Link", "HyruleLink"])
+
+    def test_the_intro_plays_on_the_front_and_room_pages_only(self):
+        """js/intro.js (the logo package's) is the last script on index.html and
+        room.html, and never on the operator page."""
+        for name in ("index.html", "room.html"):
+            page = (WEB / name).read_text(encoding="utf-8")
+            with self.subTest(name):
+                scripts = re.findall(r"""<script\b[^>]*\bsrc="([^"]+)\"""", page)
+                self.assertEqual(scripts[-1], "js/intro.js")
+                self.assertRegex(page, r"""<script src="js/intro.js"></script>\s*</body>""")
+        self.assertNotIn("intro.js", (WEB / "operator.html").read_text(encoding="utf-8"))
 
     def test_the_bar_is_the_first_thing_on_the_front_and_operator_pages(self):
         for name in OWN_PAGES:
@@ -169,7 +264,8 @@ function mem(init) {
 const out = {};
 out.redirect = ['?room=ABCDEFGH23', '?watch=Xy_z-12AB', 'watch=abc&x=1', '?room=abcdefgh23&x=1',
                 '', '?room=', '?watch=%20', '?foo=1'].map(H.redirectFor);
-out.code = [H.codeFrom('https://www.billogna.lol/hyrulelink/room.html?room=abcdefgh23'),
+out.code = [H.codeFrom('https://www.billogna.lol/bombosswap/room.html?room=abcdefgh23'),
+            H.codeFrom('https://www.billogna.lol/hyrulelink/room.html?room=abcdefgh23'),
             H.codeFrom(' abcd-efgh 23 '), H.codeFrom('')];
 
 // the old page's seats move over once, with the old name on them
@@ -246,7 +342,8 @@ class HomeLogicTests(unittest.TestCase):
             "room.html?room=abcdefgh23&x=1", None, None, None, None])
 
     def test_the_code_door_takes_a_code_or_a_whole_invite_link(self):
-        self.assertEqual(self.out["code"], ["ABCDEFGH23", "ABCDEFGH23", ""])
+        """An invite from before the rename (/hyrulelink/) works as well."""
+        self.assertEqual(self.out["code"], ["ABCDEFGH23", "ABCDEFGH23", "ABCDEFGH23", ""])
 
     def test_old_seats_move_over_once(self):
         got = self.out["imported"]

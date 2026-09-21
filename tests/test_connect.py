@@ -4,7 +4,7 @@ The host opens a QuakeCast room for two to four players; each seat link goes
 to that player's own ui sockets and nowhere else; the host closes it. The
 fake is a stdlib HTTP server in a thread speaking the part of RaceConnect's
 docs/CONTRACT.md this uses: POST /api/rooms, POST /api/seat/<token>
-{close, force}, GET /api/seat/<token>. The HyruleLink side runs in process
+{close, force}, GET /api/seat/<token>. The BombosSwap side runs in process
 through fastapi's TestClient over an in-memory database.
 """
 import contextlib

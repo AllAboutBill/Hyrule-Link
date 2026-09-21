@@ -1,4 +1,4 @@
-/* HyruleLink - QuakeCast cams on the room page (the Cams row).
+/* BombosSwap - QuakeCast cams on the room page (the Cams row).
  *
  * QuakeCast (https://www.billogna.lol/connect) puts two to four players'
  * cams, game windows and trackers into each other's OBS as browser sources.
@@ -7,7 +7,7 @@
  * player gets their private seat link from the server on their own ui
  * socket, {type: "cams", url}; it is never in the state document, which
  * only says who has a seat (state.cams = null | {seats: [player ids], error}).
- * There is no clock: HyruleLink has no race.
+ * There is no clock: BombosSwap has no race.
  *
  * The row is there only when the server has QuakeCast (state.cams present,
  * null or not), and only for players. Others than the host see it only while

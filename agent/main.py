@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-main.py — HyruleLink agent entry point.
+main.py — BombosSwap agent entry point.
 
 First run:  python -m agent.main --setup     (logs in, joins a room, writes config)
 Then:       python -m agent.main              (connects emulator + server, runs)
@@ -56,7 +56,7 @@ def _post(url, payload, token=None):
 
 
 def setup():
-    print("── HyruleLink agent setup ── (most players should just use Play.cmd)")
+    print("── BombosSwap agent setup ── (most players should just use Play.cmd)")
     http = input("Server URL [http://localhost:5019]: ").strip() or "http://localhost:5019"
     http = http.rstrip("/")
     display = input("Your display name: ").strip() or "Player"
@@ -128,7 +128,7 @@ def run(config_path=None):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="HyruleLink player agent")
+    ap = argparse.ArgumentParser(description="BombosSwap player agent")
     ap.add_argument("--setup", action="store_true", help="interactive login/join + write config.json")
     ap.add_argument("--config", help="path to a config.json (default: agent/config.json)")
     args = ap.parse_args()

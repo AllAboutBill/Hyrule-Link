@@ -1,5 +1,5 @@
 """
-app.py — HyruleLink coordination server (FastAPI).
+app.py — BombosSwap coordination server (FastAPI).
 
 Serves the web UI, the account/room REST API, and the single /ws WebSocket that
 both player agents and browsers dial out to. Run remotely (e.g. your droplet)
@@ -73,7 +73,7 @@ for _type, _ext in (("text/javascript", ".js"), ("text/css", ".css"), ("image/sv
                     ("font/woff2", ".woff2"), ("font/ttf", ".ttf")):
     mimetypes.add_type(_type, _ext)
 
-app = FastAPI(title="HyruleLink")
+app = FastAPI(title="BombosSwap")
 db.init()
 logger = logging.getLogger("HyruleLink.server")
 
@@ -232,7 +232,7 @@ async def auth_callback(code: str = "", state: str = ""):
         return HTMLResponse("<!doctype html><meta charset=utf-8>"
             "<body style='font-family:system-ui;background:#070709;color:#e8e6f0;"
             "text-align:center;padding-top:18vh'><h2>✓ Logged in</h2>"
-            "<p>You can close this tab and return to HyruleLink.</p></body>")
+            "<p>You can close this tab and return to BombosSwap.</p></body>")
     resp = RedirectResponse("/")
     resp.set_cookie(auth.SESSION_COOKIE, sess, max_age=auth.SESSION_TTL,
                     httponly=True, secure=True, samesite="lax")

@@ -1,4 +1,4 @@
-/* HyruleLink - the room page.
+/* BombosSwap - the room page.
  *
  *   room.html?room=CODE   a player (or someone about to join, or a watcher
  *                         who has the code)
@@ -434,7 +434,7 @@
   function setTitle(name) {
     var t = name || 'Co-op';
     $('roomTitle').textContent = t;
-    document.title = t + ' - HyruleLink';
+    document.title = t + ' - BombosSwap';
   }
 
   function applyState(m) {

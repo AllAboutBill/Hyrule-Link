@@ -1,4 +1,4 @@
-/* HyruleLink - the front door: open a room, go to one, get back into one,
+/* BombosSwap - the front door: open a room, go to one, get back into one,
  * or watch one.
  *
  * Loaded in <head>, before anything is drawn, so an invite or a watch link

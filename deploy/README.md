@@ -1,14 +1,20 @@
-# HyruleLink on the droplet
+# BombosSwap on the droplet
 
-https://www.billogna.lol/hyrulelink/ and https://hyrulelink.billogna.lol are one
-service. The desktop app points at the subdomain.
+https://www.billogna.lol/bombosswap/ and https://hyrulelink.billogna.lol are one
+service. The desktop app points at the subdomain. https://www.billogna.lol/hyrulelink/,
+the address before the rename, answers with a 301 to the same path and query under
+`/bombosswap/`, so invite links from before still work.
+
+BombosSwap was called HyruleLink until 2026-09-21. Everything on the droplet kept
+that name: the service, `/opt/hyrulelink`, its files, the log, the subdomain and
+its nginx file. Only the www path changed.
 
 | | |
 |---|---|
 | app | `/opt/hyrulelink`, a git checkout of `master`. `hyrulelink.service` (this folder), user `root`, `127.0.0.1:5019`, `/opt/hyrulelink/.venv` (Python 3.10), `MemoryMax=300M` |
 | state | `.env`, `server/hyrulelink.db` (+ `-wal`, `-shm`), `server/operator.key`. All git-ignored and beside the code, so a fast-forward never touches them and the deploy never names them. |
 | nginx, subdomain | `/etc/nginx/sites-available/hyrulelink.conf` proxies `/` to `:5019`. Not managed from here. Its `location /shared/` alias served the old aurora chrome and is unused now; remove it by hand some day. |
-| nginx, www prefix | `location ^~ /hyrulelink/` in the www.billogna.lol block of `/etc/nginx/sites-available/billogna-sites.conf`, put there once by `nginx_install.py`. The prefix is stripped, which is why no page uses a leading-slash URL. `^~` keeps the site's static-file regex locations off `/hyrulelink/js` and friends. |
+| nginx, www prefix | `location ^~ /bombosswap/` in the www.billogna.lol block of `/etc/nginx/sites-available/billogna-sites.conf`, put there by `nginx_install.py`, with `location ^~ /hyrulelink/` beside it as a 301 to `/bombosswap/`. The prefix is stripped, which is why no page uses a leading-slash URL. `^~` keeps the site's static-file regex locations off `/bombosswap/js` and friends (and off `/hyrulelink/js`, which gets the redirect). |
 | deploy markers | `.deploy-prev` (the commit before the last deploy), `.deploy-prev.service` (the unit it replaced), `.deploy-pending` (a deploy that has not finished). Git-ignored, in `/opt/hyrulelink`. |
 | deploy log | `/var/log/hyrulelink-deploy.log` on the droplet, one block per deploy or rollback |
 
@@ -21,8 +27,8 @@ bash deploy/deploy.sh --check      # unit, health, HEAD vs origin/master, workin
 bash deploy/deploy.sh              # ship origin/master: push first
 bash deploy/deploy.sh --rollback   # back to .deploy-prev, unit included
 
-ssh droplet 'python3 - --dry-run' < deploy/nginx_install.py   # what the nginx step would insert
-ssh droplet 'python3 -' < deploy/nginx_install.py             # only ever needed once; idempotent
+ssh droplet 'python3 - --dry-run' < deploy/nginx_install.py   # the diff the nginx step would apply
+ssh droplet 'python3 -' < deploy/nginx_install.py             # once per nginx change; idempotent
 ssh droplet 'systemctl stop hyrulelink'                       # the off switch
 ```
 
@@ -56,10 +62,31 @@ finishes it.
 `/root/deploy-hyrulelink.sh` (the old pull-and-restart helper) still works, but
 this script supersedes it: it also installs the unit, checks health and rolls back.
 
-## First deploy (once)
+## The rename (once)
 
-Before the first `deploy.sh`, `/opt/hyrulelink` is at `b17491a` with six files
-copied in by hand from `4e5e7db` (`server/app.py`, `server/db.py`,
+Going from HyruleLink at `/hyrulelink/` to BombosSwap at `/bombosswap/`, in this
+order. The code first, so that `/bombosswap/` serves the renamed pages the moment
+nginx sends people there; the subdomain and the desktop app never notice.
+
+```bash
+git push origin master                                        # the droplet pulls from GitHub
+bash deploy/deploy.sh --check                                 # tree: clean; nginx: only the old /hyrulelink/ proxy
+bash deploy/deploy.sh                                         # new code; the unit is reinstalled (new Description)
+ssh droplet 'python3 - --dry-run' < deploy/nginx_install.py   # read the diff: the old block out, the new one in
+ssh droplet 'python3 -' < deploy/nginx_install.py             # nginx -t, then reload; prints the backup's name
+bash deploy/deploy.sh --check                                 # nginx: /bombosswap/ ...; /hyrulelink/ redirects to it
+```
+
+Then the checks under Verify. Pages left open at `/hyrulelink/` keep working until
+their socket drops; the reconnect gets the 301 and fails, and a reload lands on
+`/bombosswap/`. Seats survive: both paths are on www.billogna.lol, so they share the
+browser's storage. The undo is the nginx backup (see nginx below); the code needs no
+undo, since it serves the subdomain and either path the same way.
+
+## First deploy (once, done 2026-09-21)
+
+Kept for the record. Before the first `deploy.sh`, `/opt/hyrulelink` was at
+`b17491a` with six files copied in by hand from `4e5e7db` (`server/app.py`, `server/db.py`,
 `server/ledger.py`, `shared/protocol.py`, `web/index.html`, `web/style.css`) and an
 untracked `web.bak-pre-aurora/`. `deploy.sh` refuses to run over those, and on
 purpose it does not fix them itself. Push `master` first (it contains `4e5e7db`).
@@ -126,12 +153,35 @@ somewhere else if you ever want that.
 
 ## nginx
 
-`nginx_install.py` runs on the droplet and changes nothing unless the file defines
-the `$race_connection_upgrade` map and certbot's
-`listen [::]:443 ssl ipv6only=on; # managed by Certbot` line is there exactly once,
-inside the www.billogna.lol block. It inserts the block above that line, backs the
-file up to `billogna-sites.conf.bak.<epoch>`, runs `nginx -t`, restores the backup
-if the test fails, and reloads (never restarts). Run the `--dry-run` form first.
+`nginx_install.py` runs on the droplet. Its block is the `/bombosswap/` proxy (the
+directives the `/hyrulelink/` proxy had) and the two `/hyrulelink` redirects:
+
+```nginx
+location = /hyrulelink { return 301 /bombosswap/; }
+location ^~ /hyrulelink/ { rewrite ^/hyrulelink/(.*)$ /bombosswap/$1 permanent; }
+```
+
+`rewrite` keeps the query string, so `/hyrulelink/room.html?room=CODE` lands on
+`/bombosswap/room.html?room=CODE`. It starts from any of three states: nothing
+installed (the block goes in above certbot's line), the HyruleLink block it used to
+install (`# ---- HyruleLink co-op (...) ----` and the `/hyrulelink/` proxy; the block
+takes its place), or the block already there (nothing changed). A `/hyrulelink` or
+`/bombosswap` location in any other shape, edited by hand, makes it refuse.
+
+It changes nothing unless the file defines the `$race_connection_upgrade` map and
+certbot's `listen [::]:443 ssl ipv6only=on; # managed by Certbot` line is there
+exactly once, inside the www.billogna.lol block. It backs the file up to
+`billogna-sites.conf.bak.<epoch>`, writes it, runs `nginx -t`, restores the backup
+if the test fails, and reloads (never restarts). Run the `--dry-run` form first: it
+prints the diff. `tests/test_nginx_install.py` runs all three states and the
+refusals against a stand-in file, with nginx and systemctl stubbed. To try it on a
+copy of the live file (one ssh, read only):
+
+```bash
+ssh droplet cat /etc/nginx/sites-available/billogna-sites.conf > /tmp/billogna-sites.conf
+.venv/Scripts/python.exe deploy/nginx_install.py --dry-run /tmp/billogna-sites.conf
+```
+
 Undo:
 
 ```bash
@@ -142,10 +192,14 @@ ssh droplet 'cp /etc/nginx/sites-available/billogna-sites.conf.bak.<epoch> /etc/
 
 ```bash
 curl -s https://hyrulelink.billogna.lol/api/health
-curl -s https://www.billogna.lol/hyrulelink/api/health
-curl -sI https://www.billogna.lol/hyrulelink | head -1                      # 301 -> /hyrulelink/
-curl -sI https://www.billogna.lol/hyrulelink/js/items.js | head -1
-curl -s -o /dev/null -w "%{http_code}\n" https://www.billogna.lol/hyrulelink/api/operator/rooms   # 403
+curl -s https://www.billogna.lol/bombosswap/api/health
+curl -sI https://www.billogna.lol/bombosswap | head -1                      # 301 -> /bombosswap/
+curl -sI https://www.billogna.lol/bombosswap/js/items.js | head -1          # 200
+curl -s https://www.billogna.lol/bombosswap/ | grep -o '<title>[^<]*'      # BombosSwap - ...
+curl -s -o /dev/null -w "%{http_code}\n" https://www.billogna.lol/bombosswap/api/operator/rooms   # 403
+curl -sI "https://www.billogna.lol/hyrulelink/room.html?room=ABCDEFGH23" | grep -i -E '^(HTTP|location)'
+#   301, location: https://www.billogna.lol/bombosswap/room.html?room=ABCDEFGH23
+curl -sI https://www.billogna.lol/hyrulelink | grep -i -E '^(HTTP|location)'   # 301 -> /bombosswap/
 curl -s https://www.billogna.lol/ethernet/api/health && curl -s https://www.billogna.lol/connect/health
 ssh droplet 'journalctl -u hyrulelink -n 20 --no-pager'
 ```

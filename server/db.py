@@ -1,5 +1,5 @@
 """
-db.py — tiny stdlib-sqlite3 persistence for HyruleLink.
+db.py — tiny stdlib-sqlite3 persistence for BombosSwap.
 
 No accounts: a "player" is just a display name + a per-room secret token, created
 on join. The room CODE is the shared secret that gates entry; the player TOKEN

@@ -283,7 +283,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_handshake_like_snes_js(self):
         async with connect(self.ws_url) as ws:
             self.assertIn('"SNI-fake"', await self.ask(ws, "AppVersion"))
-            await self.send(ws, "Name", "HyruleLink")                 # no reply
+            await self.send(ws, "Name", "BombosSwap")                 # no reply
             self.assertIn('"emunwa://fake-alttp:48879"', await self.ask(ws, "DeviceList"))
             await self.send(ws, "Attach", "emunwa://fake-alttp:48879")  # no reply
             info = await self.ask(ws, "Info")                         # the next reply is Info's
