@@ -457,7 +457,8 @@ async def _serve_ui(ws, code, user_id, is_admin=False):
             else:
                 await hub.dispatch(code, eff, msg.get("item"))
         elif mtype in (P.ADMIN_SET_COOLDOWN, P.ADMIN_REMOVE_PLAYER, P.ADMIN_SET_DISCOVERED,
-                       P.ADMIN_SET_OWNER, P.ADMIN_SET_MODE, P.ADMIN_SET_RULES, P.ADMIN_SET_NAME):
+                       P.ADMIN_SET_OWNER, P.ADMIN_SET_MODE, P.ADMIN_SET_RULES, P.ADMIN_SET_NAME,
+                       P.ADMIN_RESET_ROOM):
             if not (is_admin or user_id == hub.rooms[code].host):
                 await ws.send_json({"type": P.REJECT, "reason": "host only"})
                 continue
@@ -482,6 +483,8 @@ async def _serve_ui(ws, code, user_id, is_admin=False):
                 await hub.admin_set_mode(code, msg.get("mode", "normal"), msg.get("seconds"))
             elif mtype == P.ADMIN_SET_NAME:
                 await hub.admin_set_name(code, msg.get("name", ""))
+            elif mtype == P.ADMIN_RESET_ROOM:
+                await hub.admin_reset_room(code)
 
 
 # ── static UI ──────────────────────────────────────────────────────────────

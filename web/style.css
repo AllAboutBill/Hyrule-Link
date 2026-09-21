@@ -54,20 +54,15 @@ body {
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
-/* ── header / nav ───────────────────────────────────────────────────────── */
-.site-header {
-  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
-  backdrop-filter: blur(14px); background: rgba(7, 7, 9, 0.55);
-  border-bottom: 1px solid var(--border);
-}
-.site-nav { max-width: 1180px; margin: 0 auto; padding: 14px 22px; display: flex; align-items: center; justify-content: space-between; }
-.site-logo {
-  font-family: "Unbounded", sans-serif; font-weight: 900; letter-spacing: -0.01em;
-  font-size: 1.2rem; color: var(--ink); text-shadow: 0 0 14px rgba(179, 255, 200, 0.18);
-}
-.site-links { display: flex; align-items: center; gap: 16px; }
-.site-links a { color: var(--text-2); font-size: 0.92em; padding: 6px 8px; border-radius: 8px; text-decoration: none; transition: color .16s; }
-.site-links a:hover { color: #fff; }
+/* ── header / nav ─────────────────────────────────────────────────────────
+   The header, nav and logo are now the shared billogna.lol ones (base.css +
+   themes/aurora.css, rendered by site-nav.js). The local re-implementations
+   that used to live here were removed so they stop overriding it. */
+/* No margin-left:auto here — the slot is empty until app.js fills it, and an
+   auto margin on a zero-width flex item eats all the nav's free space and
+   drags the links back against the wordmark. */
+.hl-auth { display: flex; align-items: center; gap: 10px; }
+@media (max-width: 920px) { .hl-auth { display: none; } }
 .pavatar { width: 18px; height: 18px; border-radius: 50%; vertical-align: middle;
   margin-right: .35em; object-fit: cover; border: 1px solid var(--border); }
 .oavatar { width: 15px; height: 15px; border-radius: 50%; vertical-align: -3px;

@@ -235,7 +235,7 @@ def resolve_pickup(room: RoomState, user_id: int, key: str, level: int) -> Effec
         prev_name = room.names.get(prev, "someone")
         eff.event = f"{name} grabbed {item.name} from {prev_name}"
         eff.notifies.append((user_id, f"{item.name} taken from {prev_name}"))
-        eff.notifies.append((prev, f"{item.name} lost - {name} found their own"))
+        eff.notifies.append((prev, f"{item.name} sent to {name}"))
     elif prev == user_id:
         eff.event = f"{name} upgraded {item.name}" if upgraded else None
         if upgraded:
@@ -769,6 +769,32 @@ class RoomHub:
         room.name = name
         db.update_name(code, name)
         await self.broadcast_event(code, f"Room renamed to “{name}”")
+        await self.broadcast_state(code)
+
+    async def admin_reset_room(self, code: str):
+        """Wipe ALL progression — ownership, discoveries, cooldowns, borrows —
+        but keep the room, its players, mode and rules. For "everyone re-roll":
+        the room code stays valid, nobody re-joins, the pool just starts empty.
+        Every connected agent gets an exhaustive revoke so a live game drops
+        its shared items immediately (a fresh save simply starts with none)."""
+        room = self.rooms.get(code)
+        if room is None:
+            return
+        room.items.clear()
+        room.thief_cd.clear()
+        room.victim_shield.clear()
+        room.steal_log.clear()
+        room.last_lost.clear()
+        room.last_shuffle = time.time()
+        self.apply_failures.pop(code, None)
+        db.clear_ledger(code)
+        db.touch_room(code)
+        for ws in self.agents.get(code, {}).values():
+            for item in ITEMS:
+                await self._send(ws, {"type": P.REVOKE, "item": item.key})
+            await self._send(ws, {"type": P.NOTIFY, "text": "Room reset - fresh start!"})
+        await self.broadcast_event(
+            code, "Host reset the room — all progression cleared. Re-roll your seeds!")
         await self.broadcast_state(code)
 
     # ── game modes: auto-shuffle engine ──────────────────────────────────────

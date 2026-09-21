@@ -48,6 +48,7 @@ ADMIN_SET_OWNER = "admin_set_owner"           # {player_id|null, item}
 ADMIN_SET_MODE = "admin_set_mode"             # {mode: normal|hot_potato|chaos, seconds}
 ADMIN_SET_RULES = "admin_set_rules"           # {rules:{...}}  custom ruleset (mode=custom)
 ADMIN_SET_NAME = "admin_set_name"             # {name}  rename the room
+ADMIN_RESET_ROOM = "admin_reset_room"         # {} wipe all progression, keep players/settings
 
 # server -> agent
 GRANT = "grant"

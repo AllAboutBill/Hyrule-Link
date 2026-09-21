@@ -105,7 +105,7 @@ def run(config_path=None):
     with open(config_path) as f:
         cfg = json.load(f)
 
-    from agent.agent import HyruleAgent
+    from agent.agent import HyruleAgent, BOT_HUD_URL
     transport = build_transport(cfg)
     agent = HyruleAgent(
         transport=transport,
@@ -114,6 +114,7 @@ def run(config_path=None):
         user_id=cfg.get("player_id", cfg.get("user_id")),
         player_token=cfg["player_token"],
         poll_interval=float(cfg.get("poll_interval", 1.0)),
+        bot_hud_url=BOT_HUD_URL,   # hand HUD lines to BillognaBot when it runs here
     )
     logger.info("Room %s as player %s. Start your emulator + load your seed.",
                 cfg["room"], cfg.get("player_id", cfg.get("user_id")))

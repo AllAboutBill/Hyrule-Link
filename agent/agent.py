@@ -13,6 +13,7 @@ address so our own poll loop doesn't mistake a grant/revoke for a fresh pickup.
 
 import json
 import logging
+import os
 import threading
 import time
 
@@ -27,6 +28,16 @@ from .sni.item_effects import ABILITY_ADDR, RUN_ABILITY_MASK
 
 logger = logging.getLogger("HyruleAgent")
 
+# BillognaBot's HUD text endpoint (see HyruleAgent._hud_show). Empty = never
+# forward, always draw the strip ourselves.
+BOT_HUD_URL = (os.environ.get("HYRULELINK_BOT_HUD", "http://127.0.0.1:5000/api/hud/say")
+               if os.environ.get("HYRULELINK_BOT_HUD", "1") not in ("0", "", "off", "no")
+               else "")
+if BOT_HUD_URL and not BOT_HUD_URL.startswith("http"):
+    BOT_HUD_URL = "http://127.0.0.1:5000/api/hud/say"
+BOT_HUD_TIMEOUT_S = 1.5     # a bot mid-startup can hold the socket this long
+BOT_HUD_RETRY_S = 30.0      # after a refused/failed call, draw locally this long
+
 GAME_MODE_ADDR = MEMORY_ADDRESSES["game_mode"]  # 0x0010
 
 # Items grouped by the WRAM address they live in (bitfields share an address).
@@ -40,7 +51,7 @@ _TRACKED_SIZE = _TRACKED_ADDRS[-1] - _TRACKED_START + 1
 
 class HyruleAgent:
     def __init__(self, transport, server_ws_url, room, user_id, player_token,
-                 poll_interval=1.0, on_notify=None, hud_text=True):
+                 poll_interval=1.0, on_notify=None, hud_text=True, bot_hud_url=None):
         self.t = transport
         self.fx = Effects(transport)
         self.url = server_ws_url
@@ -55,6 +66,11 @@ class HyruleAgent:
         # true in-game messages: rendered on the HUD strip via WRAM writes
         # (works on every transport, no ROM patch — see sni/hud_text.py)
         self.hud = HudText(transport) if hud_text else None
+        # BillognaBot's /api/hud/say, or "" to always draw the strip ourselves
+        # (see _hud_show). Callers pass BOT_HUD_URL; tests leave it off.
+        self._bot_hud_url = bot_hud_url or ""
+        # when the bot's endpoint last failed (0 = try it): _hud_show
+        self._bot_hud_retry_at = 0.0
 
         self.ws = None
         self._ws_ready = threading.Event()
@@ -123,13 +139,47 @@ class HyruleAgent:
             except Exception as e:
                 logger.debug("notify callback failed: %s", e)
         if self.hud:
-            self.hud.show(text)            # in-game HUD strip (drawn by the poll loop)
+            self._hud_show(text)           # in-game HUD strip (drawn by the poll loop)
         show = getattr(self.t, "show_message", None)
         if show and self.t.connected:
             try:
                 show(text)                 # emulator OSD (RetroArch only)
             except Exception as e:
                 logger.debug("emulator notification failed: %s", e)
+
+    # ----- in-game HUD strip: one writer at a time -------------------------
+    # BillognaBot (the streaming bot) writes chat/bits/points/welcome lines to
+    # the same 20-cell HUD strip. When it is running on this PC it owns the
+    # strip, so our messages go through its queue (POST /api/hud/say) instead
+    # of racing it cell-for-cell; when it is not running, or it says it can't
+    # draw right now (emulator not connected there), we draw ourselves.
+    # Disable with HYRULELINK_BOT_HUD=0 (or a blank URL).
+
+    def _hud_show(self, text):
+        if not self._bot_hud_url or self._bot_hud_retry_at > time.time():
+            self.hud.show(text)
+            return
+        # Off the websocket thread: a bot that is starting up can hold the
+        # connection for the full timeout and we must not stall grant/revoke.
+        threading.Thread(target=self._hud_forward, args=(text,), daemon=True).start()
+
+    def _hud_forward(self, text):
+        import urllib.request
+        body = json.dumps({"text": text, "source": "hyrulelink"}).encode("utf-8")
+        req = urllib.request.Request(self._bot_hud_url, data=body, method="POST",
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=BOT_HUD_TIMEOUT_S) as resp:
+                reply = json.loads(resp.read().decode("utf-8") or "{}")
+            if reply.get("ok") and reply.get("shown"):
+                return                     # the bot drew it
+            logger.debug("bot HUD declined (%s); drawing locally", reply)
+        except Exception as e:
+            # Not running (connection refused), or not ready: draw locally and
+            # don't knock again for a while.
+            self._bot_hud_retry_at = time.time() + BOT_HUD_RETRY_S
+            logger.debug("bot HUD unreachable (%s); drawing locally", e)
+        self.hud.show(text)
 
     def _on_error(self, ws, err):
         logger.debug("ws error: %s", err)
@@ -304,17 +354,29 @@ class HyruleAgent:
         for key, (level, enable) in pending:
             self._apply(key, level, enable)
 
-    def _resync(self, reason):
-        """Re-seed pickup detection from the current WRAM WITHOUT reporting its
-        contents as fresh pickups, and ask the server to re-push our ownership
-        so the game is reconciled to the authoritative ledger. Used when the
-        emulator comes back (crash/reload) and when a save is (re)loaded."""
-        logger.info("%s — re-seeding state and requesting resync.", reason)
-        with self._lock:
-            self._baseline.clear()
-            self._expected.clear()
-        if self.hud:
-            self.hud.reset()   # the game rebuilt the HUD; our snapshot is void
+    def _resync(self, reason, wipe_baseline=True):
+        """Ask the server to re-push our ownership so the game is reconciled to
+        the authoritative ledger. Used when the emulator comes back (crash/
+        reload) and when a save is (re)loaded.
+
+        `wipe_baseline` re-seeds pickup detection from current WRAM WITHOUT
+        reporting its contents as fresh pickups — correct when the save may
+        genuinely have changed underneath us (reload/restart), since a stale
+        mirror shouldn't be reported as a find. But a plain transport blip (the
+        emulator's command port hiccuped; the same save kept running the whole
+        time) must NOT wipe it: the old baseline is still valid, and doing so
+        would silently swallow any pickup that happened during the outage —
+        the server's next ownership push then has no record of it and revokes
+        an item the player legitimately holds."""
+        logger.info("%s — %s.", reason,
+                    "re-seeding state and requesting resync" if wipe_baseline
+                    else "requesting resync")
+        if wipe_baseline:
+            with self._lock:
+                self._baseline.clear()
+                self._expected.clear()
+            if self.hud:
+                self.hud.reset()   # the game rebuilt the HUD; our snapshot is void
         if self.ws and self._ws_ready.is_set():
             try:
                 self.ws.send(json.dumps({"type": P.RESYNC}))
@@ -327,7 +389,7 @@ class HyruleAgent:
                 if not self.t.connected:
                     self.t.connect()
                 if self.t.connected and not self._emu_was_connected:
-                    self._resync("Emulator reconnected")
+                    self._resync("Emulator reconnected", wipe_baseline=False)
                     self._send_status()
                 elif not self.t.connected and self._emu_was_connected:
                     self._send_status()  # emulator just went offline

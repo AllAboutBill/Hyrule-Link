@@ -355,6 +355,23 @@ class AgentSaveGateTests(unittest.TestCase):
         self.assertEqual(pickups, [])                     # a revert is NOT a fresh find
         self.assertIn({"type": "resync"}, agent.ws.messages)
 
+    def test_emulator_reconnect_does_not_swallow_a_pickup_made_during_the_blip(self):
+        t = MemoryTransport()
+        t.memory[GAME_MODE_ADDR] = 0x07
+        agent = self.agent(t)
+        agent._poll_once()                                # seed baseline (no lamp yet)
+        t.memory[self.LAMP] = 1                           # picked up while the transport blipped
+        # A plain transport hiccup (e.g. RetroArch's UDP command port missing a
+        # few replies) is NOT a save reload — the same save kept running the
+        # whole time, so the old baseline is still valid and must be kept; a
+        # full wipe would silently swallow this pickup, and the ledger would
+        # then never learn the player found it.
+        agent._resync("Emulator reconnected", wipe_baseline=False)
+        agent.ws.messages.clear()
+        agent._poll_once()
+        pickups = [m for m in agent.ws.messages if m.get("type") == "pickup"]
+        self.assertEqual(pickups, [{"type": "pickup", "item": "lamp", "level": 1}])
+
     def test_death_does_not_trigger_a_resync(self):
         t = MemoryTransport()
         t.memory[GAME_MODE_ADDR] = 0x07

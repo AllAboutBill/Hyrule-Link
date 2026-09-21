@@ -563,6 +563,12 @@ $("admin-name-apply").onclick = () => {
   const v = ($("admin-name").value || "").trim();
   if (v) sendWS({ type: "admin_set_name", name: v });
 };
+$("admin-reset").onclick = () => {
+  const typed = prompt(
+    "Reset ALL progression? Every player's items, discoveries and claims are wiped " +
+    "(players, room code and settings are kept). There is no undo.\n\nType RESET to confirm:");
+  if ((typed || "").trim().toUpperCase() === "RESET") sendWS({ type: "admin_reset_room" });
+};
 // One Apply for the mode row: send only what changed, so re-applying the same
 // mode doesn't reset the shuffle timer / spam an event on the server.
 $("admin-mode-apply").onclick = () => {

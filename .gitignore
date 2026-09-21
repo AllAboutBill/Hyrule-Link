@@ -25,3 +25,11 @@ tools/sni/sni.exe
 seeds/
 *.sfc
 *.smc
+
+# Downloaded sprite catalog/preview/.zspr cache + reskin preview render
+agent/cache/
+agent/romtools/npc_sprite/out/
+
+# Personal files that live in the working copy
+agent/gui_settings.backup*.json
+/*.zspr

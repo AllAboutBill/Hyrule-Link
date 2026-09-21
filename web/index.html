@@ -6,8 +6,19 @@
   <title>HyruleLink — shared-inventory co-op for ALTTPR</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <meta name="theme-color" content="#05060c" />
+  <meta name="color-scheme" content="dark" />
+  <link rel="icon" type="image/png" href="https://www.billogna.lol/img/AngryFace.png" />
   <link rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;700;900&family=DM+Mono:wght@400;500&display=swap" />
+        href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@400;600;700;800&family=Unbounded:wght@400;700;900&family=DM+Mono:wght@400;500&display=swap" />
+  <!-- Shared billogna.lol chrome: the header, command palette and footer now come
+       from the same stylesheets as www, so this page stops drifting from the rest
+       of the site. /shared/ is aliased to the www asset dir in nginx.
+       style.css loads last and still owns everything below the header. -->
+  <link rel="stylesheet" href="/shared/css/base.css?v=20260729" />
+  <link rel="stylesheet" href="/shared/css/site-extras.css?v=20260729" />
+  <link id="themeCss" rel="stylesheet" href="/shared/css/themes/aurora.css?v=20260729" />
+  <script>document.documentElement.dataset.theme = 'aurora';</script>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
@@ -20,16 +31,24 @@
   <canvas id="nexus-pixels" aria-hidden="true"></canvas>
   <div class="noise" aria-hidden="true"></div>
 
+  <!-- Header — the canonical nav is rendered by /shared/js/site-nav.js, same as
+       every other billogna.lol page. -->
   <header class="site-header">
-    <nav class="site-nav">
-      <span class="site-logo">HyruleLink</span>
-      <div class="site-links">
-        <span id="whoami" class="muted"></span>
-        <span id="auth" class="auth"></span>
-        <a href="https://billogna.lol">billogna.lol</a>
-      </div>
-    </nav>
+    <noscript>
+      <nav class="site-nav" aria-label="Primary">
+        <a href="https://www.billogna.lol/" class="site-logo">BILLOGNA.LOL</a>
+        <div class="site-links"><a href="https://www.billogna.lol/">Home</a></div>
+      </nav>
+    </noscript>
   </header>
+
+  <!-- Auth controls live outside the header because site-nav.js owns the
+       header's markup; the script at the bottom moves them into the rendered
+       nav once it exists. app.js still finds them by id either way. -->
+  <div id="hl-auth-slot" hidden>
+    <span id="whoami" class="muted"></span>
+    <span id="auth" class="auth"></span>
+  </div>
 
   <main class="page">
     <!-- Entry (no login — just a name + room code) -->
@@ -123,6 +142,12 @@
         <p class="muted">On any item below: <strong>click</strong> a player chip to toggle
           <em>found / un-found</em>; <strong>shift-click</strong> to set or clear the
           <em>owner</em>. Use this to fix a player's state after a game disconnect.</p>
+        <div class="admin-row">
+          <button id="admin-reset" class="small"
+                  style="border-color:#ff7585;color:#ff7585">Reset progression…</button>
+          <span class="muted">wipes all items/discoveries so everyone can re-roll —
+            players and settings are kept</span>
+        </div>
         </div>
       </div>
 
@@ -216,10 +241,48 @@
     </div>
   </div>
 
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <nav class="footer-links" aria-label="Footer">
+        <a href="https://www.billogna.lol/">Home</a>
+        <a href="https://www.billogna.lol/#streams">Stream</a>
+        <a href="https://discord.billogna.lol">Discord</a>
+        <a href="https://www.billogna.lol/github.html">Projects</a>
+      </nav>
+      <p class="footer-note" data-scramble>Shared-inventory co-op for ALTTPR</p>
+      <p class="footer-legal">&copy; <span data-year>2026</span> Billogna.lol</p>
+    </div>
+  </footer>
+
   <script src="/static/claim-policy.js"></script>
   <script src="/static/app.js"></script>
-  <script src="/static/nexus-bg.js"></script>
-  <script src="/static/pixel-canvas.js"></script>
-  <script src="/static/pixel-hover.js"></script>
+
+  <!-- Shared chrome. nexus-bg / pixel-canvas / pixel-hover now come from /shared/
+       instead of the copies in /static/ — pixel-canvas.js registers a custom
+       element, and loading both copies would throw on the second define(). -->
+  <script src="/shared/js/nexus-bg.js?v=20260729"></script>
+  <script src="/shared/js/perf-guards.js?v=20260729"></script>
+  <script src="/shared/js/site-nav.js?v=20260729"></script>
+  <script src="/shared/js/portal-nav.js?v=20260729"></script>
+  <script src="/shared/js/hud-header.js?v=20260729"></script>
+  <script src="/shared/js/aurora-fx.js?v=20260729"></script>
+  <script src="/shared/js/theme-boot.js?v=20260729"></script>
+  <script src="/shared/js/pixel-canvas.js?v=20260628"></script>
+  <script src="/shared/js/pixel-hover.js?v=20260729"></script>
+  <script>
+    // Slot the Discord auth controls into the shared nav (after hud-header.js
+    // has added its ⌘K chip, so we can sit just before it).
+    (function moveAuthIntoNav() {
+      var nav = document.querySelector('.site-nav');
+      var slot = document.getElementById('hl-auth-slot');
+      if (!nav || !slot) return;
+      slot.hidden = false;
+      slot.className = 'hl-auth';
+      nav.insertBefore(slot, nav.querySelector('.cmdk-trigger') || nav.querySelector('.nav-toggle'));
+    })();
+    document.querySelectorAll('[data-year]').forEach(function (el) {
+      el.textContent = new Date().getFullYear();
+    });
+  </script>
 </body>
 </html>

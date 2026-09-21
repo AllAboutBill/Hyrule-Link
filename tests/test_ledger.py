@@ -150,6 +150,33 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(first.messages, [{"type": P.NOTIFY, "text": "Items shuffled"}])
         self.assertEqual(second.messages, [{"type": P.NOTIFY, "text": "Items shuffled"}])
 
+    def test_admin_reset_room_wipes_progression_but_keeps_players(self):
+        hub = RoomHub()
+        room = self.room()
+        hub.rooms[room.code] = room
+        a1, a2 = FakeWebSocket(), FakeWebSocket()
+        hub.agents[room.code] = {1: a1, 2: a2}
+        # build some state: finds, a steal cooldown, and persisted rows
+        resolve_pickup(room, 1, "sword", 2)
+        resolve_pickup(room, 2, "lamp", 1)
+        room.thief_cd[1] = time.time() + 99
+        hub._persist(room, "sword")
+        hub._persist(room, "lamp")
+        self.assertTrue(db.load_ledger(room.code)[0])
+
+        asyncio.run(hub.admin_reset_room(room.code))
+
+        self.assertEqual(room.items, {})                    # in-memory ledger gone
+        self.assertEqual(room.thief_cd, {})                 # transient timers gone
+        ledger_rows, disc_rows = db.load_ledger(room.code)
+        self.assertEqual((list(ledger_rows), list(disc_rows)), ([], []))
+        self.assertEqual(room.names, {1: "A", 2: "B"})      # players survive
+        for agent in (a1, a2):                              # exhaustive revoke + notify
+            revoked = {m["item"] for m in agent.messages if m.get("type") == P.REVOKE}
+            self.assertEqual(revoked, {item.key for item in ITEMS})
+            self.assertIn("Room reset - fresh start!",
+                          [m.get("text") for m in agent.messages if m.get("type") == P.NOTIFY])
+
 
 class NotificationTests(unittest.TestCase):
     """Every transfer path must produce correctly-worded per-player messages."""
@@ -182,7 +209,7 @@ class NotificationTests(unittest.TestCase):
         resolve_pickup(room, 1, "lamp", 1)
         eff = resolve_pickup(room, 2, "lamp", 1)
         self.assertIn((2, "Lamp taken from A"), eff.notifies)
-        self.assertIn((1, "Lamp lost - B found their own"), eff.notifies)
+        self.assertIn((1, "Lamp sent to B"), eff.notifies)
 
     def test_reclaim_notifies_with_the_right_verb(self):
         hub, room, a1, a2 = self.hub_room()

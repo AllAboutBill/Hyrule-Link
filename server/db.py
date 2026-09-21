@@ -289,3 +289,10 @@ def add_discovered(room_code, item_key, player_id, level=1):
 def remove_discovered(room_code, item_key, player_id):
     _q("DELETE FROM discovered WHERE room_code=? AND item_key=? AND player_id=?",
        (room_code, item_key, player_id))
+
+
+def clear_ledger(room_code):
+    """Wipe a room's entire progression (ownership + discoveries). Players,
+    settings and the room row itself are untouched — used by the host reset."""
+    _q("DELETE FROM ledger WHERE room_code=?", (room_code,))
+    _q("DELETE FROM discovered WHERE room_code=?", (room_code,))

@@ -95,13 +95,83 @@ def preset_settings(name):
 
 
 # Cosmetic / patch options passed to pyz3r create_patched_game (valid values per
-# pyz3r.rom). MSU mode forces music off + resume on regardless of these.
+# pyz3r.rom). MSU mode forces music ON (off breaks MSU-1 playback) + resume on.
+# palette_shuffle_* and npc_* are applied locally AFTER pyz3r patches (see
+# agent/romtools/) — same post-patch byte edits AlttprHelper does.
 DEFAULT_PATCH = {"heartspeed": "half", "heartcolor": "red", "menu_speed": "instant",
                  "quickswap": True, "music": True, "spritename": "Link",
-                 "msu1_resume": False}
+                 "msu1_resume": False, "random_favs": False,
+                 "palette_shuffle_ow": False, "palette_shuffle_uw": False,
+                 "npc_reskin": False, "npc_zspr": ""}
 HEARTSPEEDS = ["off", "quarter", "half", "normal", "double"]
-HEARTCOLORS = ["red", "blue", "green", "yellow"]
+HEARTCOLORS = ["red", "blue", "green", "yellow", "random"]
+HEARTCOLOR_POOL = ["red", "blue", "green", "yellow"]   # what "random" rolls from
 MENU_SPEEDS = ["instant", "fast", "normal", "slow"]
+
+# ALTTP Japan 1.0 base ROM fingerprint — the only base alttpr.com will patch.
+# (MD5 verified against a known-working dump; size is exactly 1 MiB, no header.)
+JP10_MD5 = "03a63945398191337e896e5771f77173"
+JP10_SIZE = 1024 * 1024
+
+# MSU-1 library: one folder holding pack subfolders; picker adds these choices.
+MSU_RANDOM = "Random pack"
+MSU_ROOT_LABEL = "(library folder itself)"
+
+# Update check (release tags on GitHub vs the local VERSION file).
+GITHUB_REPO = "AllAboutBill/Hyrule-Link"
+VERSION_FILE = os.path.join(HERE, "VERSION")
+
+
+def app_version():
+    try:
+        with open(VERSION_FILE) as f:
+            return f.read().strip()
+    except OSError:
+        return "0.0.0"
+
+
+def msu_packs(library):
+    """Pack folders inside the MSU library: each subfolder with *.pcm tracks is
+    a pack; '.' means the library folder itself holds tracks directly."""
+    import glob
+    packs = []
+    if library and os.path.isdir(library):
+        if glob.glob(os.path.join(library, "*.pcm")):
+            packs.append(".")
+        try:
+            for d in sorted(os.listdir(library)):
+                p = os.path.join(library, d)
+                if os.path.isdir(p) and glob.glob(os.path.join(p, "*.pcm")):
+                    packs.append(d)
+        except OSError:
+            pass
+    return packs
+
+
+def validate_base_rom(path):
+    """(ok, message) for a base-ROM pick. Diagnoses the common wrong files
+    (copier header, rando output, wrong region/revision) instead of letting
+    alttpr.com fail ten seconds into generation with a cryptic error."""
+    import hashlib
+    if not path:
+        return False, "pick your ALTTP Japan 1.0 base ROM"
+    if not os.path.isfile(path):
+        return False, "file not found"
+    try:
+        size = os.path.getsize(path)
+        if size == JP10_SIZE + 512:
+            return False, "this dump has a 512-byte copier header — pick an unheadered copy"
+        if size >= 2 * JP10_SIZE:
+            return False, "this is an already-randomized ROM — pick the vanilla JP 1.0 base"
+        if size != JP10_SIZE:
+            return False, f"wrong size ({size:,} bytes; JP 1.0 is exactly {JP10_SIZE:,})"
+        with open(path, "rb") as f:
+            md5 = hashlib.md5(f.read()).hexdigest()
+    except OSError as e:
+        return False, f"can't read the file: {e}"
+    if md5 != JP10_MD5:
+        return False, "not ALTTP Japan 1.0 (wrong region or revision — alttpr.com only patches JP 1.0)"
+    return True, "✓ ALTTP Japan 1.0 verified"
 
 # palette — billogna.lol's "aurora" design language (see README "Web UI style").
 # mint / violet / blue over near-black; no pink. Tk can't render the web's
@@ -304,6 +374,10 @@ class App(tk.Tk):
         self.tunnel_q = queue.Queue()
         self._pub_url_entry = None  # dialog widget that shows the public link
         self.seedgen_q = queue.Queue()  # in-app seed generation status
+        self._seedgen_busy = False      # one generation at a time; gates the buttons
+        self.rejoin_q = queue.Queue()   # auto-rejoin result from the startup thread
+        self.update_note = None         # "update available" line, set by the checker
+        self._update_noted = False
         self.room = None            # join/create payload
         self._autolink_armed = False  # auto-connect once an emulator is detected
         self.agent = None           # emulator link (HyruleAgent)
@@ -339,6 +413,8 @@ class App(tk.Tk):
         self._build_chrome()
         self.show_start()
         self._check_session_async()      # validate a saved Discord login
+        self._auto_rejoin_async()        # drop back into the last room, items intact
+        self._check_updates_async()      # one-line note if a newer release exists
         threading.Thread(target=self._detect_loop, daemon=True).start()
         self._tick()
         self._pump_loop()                # fast board refresh (server-state queue)
@@ -533,6 +609,49 @@ class App(tk.Tk):
         def work():
             data, _ = http_get(base, "/api/me", self._auth_headers())
             self.login_q.put({"status": "me", "me": data if (data and data.get("logged_in")) else None})
+        threading.Thread(target=work, daemon=True).start()
+
+    def _auto_rejoin_async(self):
+        """Resume the last room on launch — the server keeps our items, so an app
+        restart mid-session drops the player straight back in. Cleared by Leave."""
+        last = self.cfg.get("last_room") or {}
+        code, server = last.get("code"), last.get("server")
+        saved = self.cfg.get("rooms", {}).get(code or "", {})
+        if not (code and server and saved.get("player_token")):
+            return
+        def work():
+            data, err = http_post(server, f"/api/rooms/{code}/resume",
+                                  {"player_id": saved["player_id"],
+                                   "player_token": saved["player_token"]})
+            self.rejoin_q.put((server, code, data, err))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _check_updates_async(self):
+        """Compare the newest GitHub release tag (falling back to tags) against
+        the local VERSION file. Sets self.update_note; _tick surfaces it once.
+        Silent on any failure — an update nudge must never break startup."""
+        def ver(s):
+            import re
+            nums = re.findall(r"\d+", s or "")
+            return tuple(int(n) for n in nums[:3]) or (0,)
+        def work():
+            latest = None
+            for url, pick in (
+                    (f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+                     lambda d: d.get("tag_name")),
+                    (f"https://api.github.com/repos/{GITHUB_REPO}/tags",
+                     lambda d: d[0]["name"] if d else None)):
+                try:
+                    req = urllib.request.Request(url, headers={"User-Agent": "HyruleLink"})
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        latest = pick(json.loads(r.read().decode()))
+                except Exception:
+                    latest = None
+                if latest:
+                    break
+            if latest and ver(latest) > ver(app_version()):
+                self.update_note = (f"Update available: {latest} (you have {app_version()}) — "
+                                    f"github.com/{GITHUB_REPO}/releases")
         threading.Thread(target=work, daemon=True).start()
 
     def _discord_login(self):
@@ -750,6 +869,8 @@ class App(tk.Tk):
                  "session from this PC.", fg=MUTED, bg=BG, font=("Segoe UI", 10),
                  anchor="w").pack(anchor="w")
 
+        self._ready_strip(shell)
+
         columns = tk.Frame(shell, bg=BG); columns.pack(fill="both", expand=True)
         columns.grid_columnconfigure(0, weight=3, uniform="start")
         columns.grid_columnconfigure(1, weight=2, uniform="start")
@@ -831,6 +952,59 @@ class App(tk.Tk):
         self.err.pack(fill="x", pady=(10, 0))
         self.toast_lbl = self._label(shell, "", fg=GREEN, font=("Segoe UI", 9))
         self.toast_lbl.pack(fill="x")
+        if self.update_note:                 # keep the nudge visible on later visits
+            self.toast_lbl.config(text="⬆ " + self.update_note)
+
+    def _ready_strip(self, parent):
+        """'Ready to play' checklist for new players. Each chip is clickable and
+        opens whatever fixes it; the strip re-checks itself every 2s while the
+        start screen is up, so finishing a dialog turns its chip green live."""
+        strip = tk.Frame(parent, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+        strip.pack(fill="x", pady=(0, 12))
+        tk.Label(strip, text="READY TO PLAY?", fg=MUTED, bg=PANEL,
+                 font=("Segoe UI Semibold", 8)).pack(side="left", padx=(12, 12), pady=8)
+        chips = {}
+
+        def chip(key, tip, fixer):
+            lbl = tk.Label(strip, text="…", bg=PANEL, fg=DIM, font=("Segoe UI", 9),
+                           cursor="hand2")
+            lbl.pack(side="left", padx=(0, 16))
+            lbl.bind("<Button-1>", lambda _e: fixer())
+            lbl._tip = tip
+            chips[key] = lbl
+
+        chip("base", "pick your ALTTP JP 1.0 ROM", self._seed_dialog)
+        chip("emu", "set up RetroArch / Snes9x", self._configure_emulator)
+        chip("seed", "generate a randomizer seed", self._seed_dialog)
+        chip("room", "join or create one below",
+             lambda: self.e_code.focus_set() if hasattr(self, "e_code") else None)
+
+        # base-ROM validation hashes 1 MiB — cache it by (path, mtime)
+        romcheck = {}
+        def base_ok():
+            p = self.cfg.get("base_rom", "")
+            if not p or not os.path.isfile(p):
+                return False
+            key = (p, os.path.getmtime(p))
+            if key not in romcheck:
+                romcheck.clear()
+                romcheck[key] = validate_base_rom(p)[0]
+            return romcheck[key]
+
+        def refresh():
+            if not strip.winfo_exists():
+                return                      # screen changed; this loop dies with it
+            emu = self._emu_path(self._launch_kind())
+            rom = self.cfg.get("rom_path")
+            checks = (("base", "base ROM", base_ok()),
+                      ("emu", "emulator", bool(emu and os.path.exists(emu))),
+                      ("seed", "seed", bool(rom and os.path.exists(rom))),
+                      ("room", "room", self.room is not None))
+            for key, label, ok in checks:
+                text = ("✓ " + label) if ok else ("○ " + label + " — " + chips[key]._tip)
+                chips[key].config(text=text, fg=GREEN if ok else GOLD)
+            self.after(2000, refresh)
+        refresh()
 
     def _use_public_server(self):
         """One-tap return to the shared public server (no retyping the URL)."""
@@ -1021,6 +1195,8 @@ class App(tk.Tk):
         if room_rom and os.path.exists(room_rom):
             self.cfg["rom_path"] = room_rom
         self.cfg.update(server=self.base, display=self.e_name.get().strip(), room=data["code"])
+        # auto-rejoin target for the next launch (cleared by an explicit Leave)
+        self.cfg["last_room"] = {"code": data["code"], "server": self.base}
         save_settings(self.cfg)
         self._start_ui_socket()
         self.show_room()
@@ -1126,7 +1302,8 @@ class App(tk.Tk):
         self.btn_connect.pack(fill="x")
         main_tools = tk.Frame(connect_actions, bg=PANEL); main_tools.pack(fill="x", pady=(6, 0))
         self._button(main_tools, "Launch", self.launch_emulator, small=True).pack(side="left")
-        self._button(main_tools, "Generate seed", self.generate_seed, small=True).pack(side="left", padx=5)
+        self.btn_genseed = self._button(main_tools, "Generate seed", self.generate_seed, small=True)
+        self.btn_genseed.pack(side="left", padx=5)
 
         connect_info = tk.Frame(emu, bg=PANEL); connect_info.pack(side="left", fill="both", expand=True,
                                                                   padx=14, pady=11)
@@ -1253,6 +1430,10 @@ class App(tk.Tk):
         self._apply_btn = self._button(c, "Apply", self._apply_host, small=True)
         self._apply_btn.pack(side="left", padx=8)
         self._custom_btn = self._button(c, "Customize ruleset…", self._open_rules, small=True)
+        # destructive, so it sits alone at the far right of the host row
+        reset_btn = self._button(c, "Reset progression…", self._reset_room, small=True)
+        reset_btn.config(fg=RED, activeforeground=RED)
+        reset_btn.pack(side="right", padx=(8, 2))
         # packed/unpacked by _sync_mode_fields
         self._sync_mode_fields()
         self._apply_host_collapse()
@@ -1420,6 +1601,26 @@ class App(tk.Tk):
                                      initialvalue=cur, parent=self)
         if new and new.strip():
             self._ui_send({"type": "admin_set_name", "name": new.strip()})
+
+    def _reset_room(self):
+        """Host-only: wipe all progression so everyone can re-roll their seeds.
+        The room, players and settings survive; the shared pool starts empty.
+        Deliberately high-friction — the host must type the room code."""
+        from tkinter import simpledialog
+        code = str((self.room or {}).get("code", ""))
+        if not code:
+            return
+        typed = simpledialog.askstring(
+            "Reset room progression",
+            "This wipes EVERY player's items, discoveries and claims.\n"
+            "Players, room code, mode and rules are kept. There is no undo.\n\n"
+            f"Type the room code ({code}) to confirm:", parent=self)
+        if typed is None:
+            return
+        if typed.strip().upper() == code.upper():
+            self._ui_send({"type": "admin_reset_room"})
+        else:
+            messagebox.showinfo("HyruleLink", "Reset cancelled — the code didn't match.")
 
     def _is_host(self):
         return bool(self.state) and self.state.get("you") == self.state.get("host")
@@ -1989,7 +2190,7 @@ class App(tk.Tk):
         return EmuConnector(source=source), label
 
     def _connect(self, auto=False):
-        from agent.agent import HyruleAgent
+        from agent.agent import HyruleAgent, BOT_HUD_URL
         transport, label = self._resolve_transport(auto=auto)
         if transport is None:
             return
@@ -1998,11 +2199,31 @@ class App(tk.Tk):
         logging.getLogger().addHandler(h); logging.getLogger().setLevel(logging.INFO)
         self.agent = HyruleAgent(self.transport, self._ws_url(), self.room["code"],
                                  self.room["player_id"], self.room["player_token"], poll_interval=0.5,
-                                 on_notify=self._notify_from_agent)
+                                 on_notify=self._notify_from_agent,
+                                 bot_hud_url=BOT_HUD_URL)   # BillognaBot owns the HUD strip when it runs
         self.agent.start()
         self.btn_connect.config(text="Disconnect", bg=PANEL2, fg=INK)
         self._log(f"Linking emulator via {label}…")
+        self._check_seed_changed()
         threading.Thread(target=self._greet_emu, daemon=True).start()
+
+    def _check_seed_changed(self):
+        """One-line heads-up when connecting with a different ROM than last time
+        while the room still holds progression: the fresh save is about to be
+        handed all the player's shared items. Informational only — a mid-run
+        re-roll with shared inventory intact is a designed-for flow."""
+        if self.room is None:
+            return
+        entry = self.cfg.setdefault("rooms", {}).setdefault(self.room.get("code"), {})
+        prev, cur = entry.get("connected_rom"), self.cfg.get("rom_path")
+        if (prev and cur and os.path.normcase(prev) != os.path.normcase(cur)
+                and (self.state or {}).get("ledger")):
+            self._log("⚠ New seed, old room: this room still has progression — your save "
+                      "will receive your shared items. Starting over instead? "
+                      "The host can use Reset progression.")
+        if cur:
+            entry["connected_rom"] = cur
+            save_settings(self.cfg)
 
     def _greet_emu(self):
         """Once the emulator link is live, flash a one-time OSD so the player sees
@@ -2031,6 +2252,8 @@ class App(tk.Tk):
         self._log("Emulator unlinked.")
 
     def _leave(self):
+        self.cfg.pop("last_room", None)     # an explicit Leave means don't auto-rejoin
+        save_settings(self.cfg)
         self._disconnect()
         self._ui_stop.set()
         with self.ui_lock:
@@ -2132,7 +2355,7 @@ class App(tk.Tk):
             self.emu_summary_lbl.config(text=self._emu_summary())
 
     # ── path-row helper shared by the setup dialogs ─────────────────────────
-    def _path_row(self, parent, label, value, kinds=None, directory=False):
+    def _path_row(self, parent, label, value, kinds=None, directory=False, on_change=None):
         tk.Label(parent, text=label, fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(
             anchor="w", pady=(8, 0), padx=16)
         row = tk.Frame(parent, bg=BG); row.pack(fill="x", padx=16)
@@ -2143,6 +2366,8 @@ class App(tk.Tk):
                  else filedialog.askopenfilename(title=label, filetypes=kinds or [("All", "*.*")]))
             if p:
                 e.delete(0, "end"); e.insert(0, p)
+                if on_change:
+                    on_change(p)
         tk.Button(row, text="Browse…", command=browse, relief="flat", bg=PANEL, fg=INK,
                   bd=0, padx=10).pack(side="left", padx=(6, 0))
         return e
@@ -2151,9 +2376,15 @@ class App(tk.Tk):
     def generate_seed(self):
         self._seed_dialog()
 
+    def _set_seedgen_busy(self, busy):
+        self._seedgen_busy = busy
+        if hasattr(self, "btn_genseed") and self.btn_genseed.winfo_exists():
+            self.btn_genseed.config(state="disabled" if busy else "normal",
+                                    text="Generating…" if busy else "Generate seed")
+
     def _seed_dialog(self):
         win = tk.Toplevel(self); win.title("Generate a seed"); win.configure(bg=BG)
-        win.geometry("600x430"); win.transient(self); pad = {"padx": 16}
+        win.geometry("600x560"); win.transient(self); pad = {"padx": 16}
         tk.Label(win, text="Generate an ALTTPR seed", fg=GOLD, bg=BG,
                  font=("Segoe UI Semibold", 13)).pack(anchor="w", pady=(14, 4), **pad)
         tk.Label(win, text="Patched on alttpr.com (needs internet, ~10s) and set as your ROM.",
@@ -2165,76 +2396,465 @@ class App(tk.Tk):
         ttk.Combobox(win, textvariable=preset_var, state="readonly", style="HL.TCombobox",
                      values=list(SEED_PRESET_OVERRIDES)).pack(anchor="w", **pad)
 
+        # Patch a specific existing seed (e.g. a race/tournament permalink)
+        # instead of rolling a new one; the preset is ignored then. Co-op players
+        # each roll their OWN seed — only the inventory is shared.
+        tk.Label(win, text="…or patch an existing seed — paste an alttpr.com permalink or hash "
+                           "(leave empty to roll a new one)",
+                 fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(anchor="w", pady=(8, 0), **pad)
+        e_perma = self._entry(win, value="")
+        e_perma.pack(fill="x", ipady=3, **pad)
+
         e_base = self._path_row(win, "ALTTP JP 1.0 base ROM (.sfc/.smc)", self.cfg.get("base_rom", ""),
-                                [("SNES ROM", "*.sfc *.smc"), ("All", "*.*")])
+                                [("SNES ROM", "*.sfc *.smc"), ("All", "*.*")],
+                                on_change=lambda _p: check_rom())
+        rom_status = tk.Label(win, text="", fg=MUTED, bg=BG, font=("Segoe UI", 9))
+        rom_status.pack(anchor="w", **pad)
+        rom_ok = [False]
+
+        def check_rom(*_):
+            path = e_base.get().strip()
+            ok, msg = validate_base_rom(path)
+            rom_ok[0] = ok
+            rom_status.config(text=msg, fg=GREEN if ok else (MUTED if not path else RED))
+
+        _rom_job = [None]
+        def _rom_typed(_e):        # debounce manual typing (hashing is per-check)
+            if _rom_job[0]:
+                try: self.after_cancel(_rom_job[0])
+                except Exception: pass
+            _rom_job[0] = self.after(400, check_rom)
+        e_base.bind("<KeyRelease>", _rom_typed)
+        check_rom()
 
         msu = self.cfg.get("msu", {})
         msu_var = tk.BooleanVar(value=msu.get("enable", False))
-        tk.Checkbutton(win, text="Use an MSU-1 music pack (turns off in-ROM music)",
+        tk.Checkbutton(win, text="Use an MSU-1 music pack (custom soundtrack)",
                        variable=msu_var, fg=INK, bg=BG, selectcolor=PANEL2, activebackground=BG,
                        activeforeground=INK, font=("Segoe UI", 9), anchor="w").pack(
                            anchor="w", padx=12, pady=(10, 0))
-        e_msu = self._path_row(win, "MSU pack folder (its *.pcm tracks are copied next to the seed)",
-                               msu.get("pack_dir", ""), directory=True)
+        # One library folder, many packs: each subfolder with *.pcm tracks is a
+        # pack; pick one per seed or let it roll. (Legacy single pack_dir configs
+        # seed the library field so nothing breaks.)
+        pack_var = tk.StringVar(value=msu.get("pack") or MSU_RANDOM)
+
+        def refresh_packs(_p=None):
+            packs = msu_packs(e_msu.get().strip())
+            names = [MSU_RANDOM] + [MSU_ROOT_LABEL if p == "." else p for p in packs]
+            cb_pack.config(values=names)
+            if pack_var.get() not in names:
+                pack_var.set(MSU_RANDOM)
+
+        e_msu = self._path_row(win, "MSU library folder (each subfolder = one pack)",
+                               msu.get("library") or msu.get("pack_dir", ""), directory=True,
+                               on_change=refresh_packs)
+        packrow = tk.Frame(win, bg=BG); packrow.pack(fill="x", pady=(4, 0), **pad)
+        tk.Label(packrow, text="Pack", fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(side="left")
+        cb_pack = ttk.Combobox(packrow, textvariable=pack_var, state="readonly",
+                               style="HL.TCombobox", width=34)
+        cb_pack.pack(side="left", padx=(8, 0))
+        refresh_packs()
 
         err = tk.Label(win, text="", fg=RED, bg=BG, font=("Segoe UI", 9)); err.pack(anchor="w", pady=(6, 0), **pad)
         bar = tk.Frame(win, bg=BG); bar.pack(anchor="w", pady=12, **pad)
 
         def gen():
             base = e_base.get().strip()
-            if not base or not os.path.exists(base):
-                err.config(text="pick your ALTTP JP 1.0 base ROM first"); return
+            ok, msg = validate_base_rom(base)
+            if not ok:
+                check_rom(); err.config(text=msg); return
+            if self._seedgen_busy:
+                err.config(text="a seed is already being generated — watch the activity log"); return
             self.cfg["seed_preset"] = preset_var.get()
             self.cfg["base_rom"] = base
-            self.cfg["msu"] = {"enable": msu_var.get(), "pack_dir": e_msu.get().strip()}
+            self.cfg["msu"] = {"enable": msu_var.get(), "library": e_msu.get().strip(),
+                               "pack": pack_var.get()}
             save_settings(self.cfg)
+            permalink = e_perma.get().strip()
             win.destroy()
-            self._log(f"Generating a {preset_var.get()} seed (needs internet, ~10s)…")
+            self._set_seedgen_busy(True)
+            self._log(f"Patching seed {permalink}…" if permalink
+                      else f"Generating a {preset_var.get()} seed…")
             threading.Thread(target=self._generate_seed_thread,
-                             args=(base, preset_var.get()), daemon=True).start()
+                             args=(base, preset_var.get(), permalink), daemon=True).start()
         self._button(bar, "Generate", gen, primary=True).pack(side="left")
         self._button(bar, "Patch / cosmetics…", self._patch_dialog).pack(side="left", padx=8)
         self._button(bar, "Cancel", win.destroy).pack(side="left")
 
     def _patch_dialog(self):
+        from agent.romtools import sprites as sprite_cat
         win = tk.Toplevel(self); win.title("Patch / cosmetics"); win.configure(bg=BG)
-        win.geometry("440x420"); win.transient(self); pad = {"padx": 16}
+        win.geometry("700x620"); win.transient(self); pad = {"padx": 16}
         tk.Label(win, text="Cosmetic / patch settings", fg=GOLD, bg=BG,
                  font=("Segoe UI Semibold", 13)).pack(anchor="w", pady=(14, 8), **pad)
         p = {**DEFAULT_PATCH, **self.cfg.get("patch", {})}
 
-        def combo(label, var, values):
-            tk.Label(win, text=label, fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(anchor="w", pady=(6, 0), **pad)
-            ttk.Combobox(win, textvariable=var, state="readonly", style="HL.TCombobox",
-                         values=values).pack(anchor="w", **pad)
+        cols = tk.Frame(win, bg=BG); cols.pack(fill="both", expand=True)
+        left = tk.Frame(cols, bg=BG); left.pack(side="left", fill="both", expand=True)
+        right = tk.Frame(cols, bg=BG); right.pack(side="left", anchor="n", padx=(0, 16))
+
+        def combo(label, var, values, state="readonly"):
+            tk.Label(left, text=label, fg=MUTED, bg=BG, font=("Segoe UI", 9)).pack(anchor="w", pady=(6, 0), **pad)
+            cb = ttk.Combobox(left, textvariable=var, state=state, style="HL.TCombobox",
+                              values=values)
+            cb.pack(anchor="w", fill="x", **pad)
+            return cb
 
         hs = tk.StringVar(value=p["heartspeed"]); combo("Low-health beep", hs, HEARTSPEEDS)
-        hc = tk.StringVar(value=p["heartcolor"]); combo("Heart color", hc, HEARTCOLORS)
+        hc = tk.StringVar(value=p["heartcolor"]); combo("Heart color ('random' rolls one per seed)", hc, HEARTCOLORS)
         ms = tk.StringVar(value=p["menu_speed"]); combo("Menu speed", ms, MENU_SPEEDS)
 
-        tk.Label(win, text="Sprite name (e.g. Link)", fg=MUTED, bg=BG,
+        # ── player sprite: full alttpr.com catalog + live preview ───────────
+        # Favorites are shown "★ Name" and pinned right under Random, then the
+        # last few used, then everything else. The star is display-only — strip
+        # it via _clean() before using the name anywhere.
+        FAV_MARK = "★ "
+
+        def _clean(name):
+            return name[len(FAV_MARK):] if name.startswith(FAV_MARK) else name
+
+        names_holder = {"names": ["Link"]}   # full catalog once the fetch lands
+
+        def _values():
+            favs = list(self.cfg.get("sprite_favs", []))
+            rec = [n for n in self.cfg.get("sprite_recent", []) if n not in favs]
+            rest = [n for n in names_holder["names"] if n not in favs and n not in rec]
+            return ([sprite_cat.RANDOM_SPRITE] + [FAV_MARK + n for n in favs] + rec + rest)
+
+        sprite_var = tk.StringVar(value=p.get("spritename", "Link"))
+        tk.Label(left, text="Player sprite (type to search, or 'Random')", fg=MUTED, bg=BG,
                  font=("Segoe UI", 9)).pack(anchor="w", pady=(6, 0), **pad)
-        e_sprite = self._entry(win, value=p.get("spritename", "Link"))
-        e_sprite.pack(fill="x", ipady=3, **pad)
+        srow = tk.Frame(left, bg=BG); srow.pack(fill="x", **pad)
+        e_sprite = self._entry(srow)
+        e_sprite.configure(textvariable=sprite_var)
+        e_sprite.pack(side="left", fill="x", expand=True, ipady=3)
+
+        # Custom dropdown (Toplevel + Treeview) because ttk.Combobox can't show
+        # images — each row gets its 16x24 portrait from the alttpr spritesheet.
+        ICONS = {}                    # sprite name -> 2x PhotoImage (list icons)
+        win._sprite_icons = ICONS     # keep Tk references alive with the dialog
+        pop = {"win": None, "tree": None}
+
+        def _popup_rows(flt=""):
+            tree = pop["tree"]
+            if not tree or not tree.winfo_exists():
+                return
+            tree.delete(*tree.get_children())
+            f = flt.strip().lower()
+            for display in _values():
+                clean = _clean(display)
+                if f and clean != sprite_cat.RANDOM_SPRITE and f not in clean.lower():
+                    continue
+                img = ICONS.get(clean)
+                tree.insert("", "end", iid=display, text=" " + display,
+                            **({"image": img} if img else {}))
+
+        def _close_popup(*_):
+            w = pop["win"]
+            pop["win"] = pop["tree"] = None
+            if w and w.winfo_exists():
+                w.destroy()
+
+        def _pick(iid):
+            if iid:
+                sprite_var.set(_clean(iid))
+                _close_popup()
+                show_sprite()
+
+        def _open_popup():
+            if pop["win"] and pop["win"].winfo_exists():
+                _close_popup(); return
+            w = tk.Toplevel(win); w.overrideredirect(True); w.configure(bg=LINE)
+            w.geometry(f"{max(300, e_sprite.winfo_width() + 40)}x340+"
+                       f"{e_sprite.winfo_rootx()}+"
+                       f"{e_sprite.winfo_rooty() + e_sprite.winfo_height() + 2}")
+            style = ttk.Style(w)
+            style.configure("Sprite.Treeview", rowheight=52, background=FIELD,
+                            fieldbackground=FIELD, foreground=INK, borderwidth=0,
+                            font=("Segoe UI", 10))
+            style.map("Sprite.Treeview", background=[("selected", PANEL2)],
+                      foreground=[("selected", INK)])
+            inner = tk.Frame(w, bg=LINE); inner.pack(fill="both", expand=True, padx=1, pady=1)
+            tree = ttk.Treeview(inner, show="tree", style="Sprite.Treeview",
+                                selectmode="browse")
+            sb = ttk.Scrollbar(inner, orient="vertical", command=tree.yview)
+            tree.configure(yscrollcommand=sb.set)
+            sb.pack(side="right", fill="y"); tree.pack(side="left", fill="both", expand=True)
+            tree.bind("<ButtonRelease-1>", lambda _e: _pick(tree.focus()))
+            tree.bind("<Return>", lambda _e: _pick(tree.focus()))
+            w.bind("<Escape>", _close_popup)
+            pop["win"], pop["tree"] = w, tree
+            _popup_rows()             # unfiltered on open — browse the whole list
+
+        def _refresh_sprite_list():
+            if pop["tree"]:
+                _popup_rows(sprite_var.get())
+
+        drop_btn = tk.Button(srow, text="▾", command=_open_popup, relief="flat", bg=PANEL,
+                             fg=INK, activebackground=LINE, activeforeground=INK, bd=0,
+                             padx=9, cursor="hand2")
+        drop_btn.pack(side="left", padx=(6, 0), fill="y")
+        # clicking anywhere else in the dialog dismisses the popup (clicks inside
+        # the popup's own Toplevel don't reach this bindtag). The ▾ button is
+        # excluded — its command handles the toggle itself.
+        win.bind("<Button-1>",
+                 lambda e: _close_popup() if e.widget is not drop_btn else None, add="+")
+        # <Configure> on a toplevel bindtag also fires for CHILD resizes (labels
+        # changing text), so only close the popup when the window actually moves.
+        _winpos = [None]
+        def _on_win_move(_e):
+            xy = (win.winfo_rootx(), win.winfo_rooty())
+            if _winpos[0] is not None and xy != _winpos[0]:
+                _close_popup()
+            _winpos[0] = xy
+        win.bind("<Configure>", _on_win_move, add="+")
+
+        tk.Label(right, text="Sprite preview", fg=MUTED, bg=BG,
+                 font=("Segoe UI", 9)).pack(anchor="w", pady=(6, 2))
+        prev_box = tk.Frame(right, bg=PANEL, width=150, height=120)
+        prev_box.pack_propagate(False); prev_box.pack()
+        prev_lbl = tk.Label(prev_box, bg=PANEL, fg=DIM, font=("Segoe UI", 8), text="…")
+        prev_lbl.pack(expand=True)
+        author_lbl = tk.Label(right, text="", fg=DIM, bg=BG, font=("Segoe UI", 8),
+                              wraplength=150, justify="left")
+        author_lbl.pack(anchor="w", pady=(2, 0))
+
+        def _sync_fav_btn():
+            name = _clean(sprite_var.get().strip())
+            fav_btn.config(text="★ Favorited" if name in self.cfg.get("sprite_favs", [])
+                           else "☆ Favorite")
+
+        def toggle_fav():
+            name = _clean(sprite_var.get().strip())
+            if not name or name == sprite_cat.RANDOM_SPRITE:
+                return
+            favs = list(self.cfg.get("sprite_favs", []))
+            favs = [n for n in favs if n != name] if name in favs else [name] + favs
+            self.cfg["sprite_favs"] = favs
+            save_settings(self.cfg)
+            _refresh_sprite_list()
+            _sync_fav_btn()
+
+        fav_btn = self._button(right, "☆ Favorite", toggle_fav, small=True)
+        fav_btn.pack(anchor="w", pady=(6, 0))
+
+        # preview state: token invalidates stale downloads, frames keeps PhotoImage
+        # refs alive, anim is the pending .after id for the GIF walk cycle.
+        pv = {"token": 0, "frames": [], "anim": None}
+
+        def _stop_anim():
+            if pv["anim"]:
+                try: self.after_cancel(pv["anim"])
+                except Exception: pass
+                pv["anim"] = None
+
+        def _animate(frames, delays, i=0):
+            if not win.winfo_exists():
+                return
+            prev_lbl.config(image=frames[i], text="")
+            pv["anim"] = self.after(delays[i], _animate, frames, delays, (i + 1) % len(frames))
+
+        def _apply_preview(token, gif, png, author):
+            if token != pv["token"] or not win.winfo_exists():
+                return
+            _stop_anim(); pv["frames"] = []
+            author_lbl.config(text=author)
+            if Image is None:
+                prev_lbl.config(image="", text="install Pillow\nfor previews"); return
+            # GIF and PNG each get their own try: a broken/absent GIF must fall
+            # back to the static portrait in the same box, not kill the preview.
+            if gif:          # animated walk cycle from the community gallery
+                try:
+                    from PIL import ImageSequence
+                    im = Image.open(gif)
+                    # gallery GIFs are ~192x192 — fit them into the preview box
+                    sc = min(146 / im.width, 116 / im.height)
+                    size = (max(1, int(im.width * sc)), max(1, int(im.height * sc)))
+                    frames, delays = [], []
+                    for f in ImageSequence.Iterator(im):
+                        frames.append(ImageTk.PhotoImage(f.convert("RGBA").resize(size, Image.NEAREST)))
+                        delays.append(max(40, int(f.info.get("duration", 120))))
+                    if len(frames) > 1:
+                        pv["frames"] = frames
+                        _animate(frames, delays); return
+                    if frames and not png:        # single-frame GIF beats nothing
+                        pv["frames"] = frames
+                        prev_lbl.config(image=frames[0], text=""); return
+                except Exception:
+                    pass
+            if png:          # static 16x24 portrait from alttpr.com
+                try:
+                    im = Image.open(png).convert("RGBA")
+                    im = im.resize((im.width * 4, im.height * 4), Image.NEAREST)
+                    ph = ImageTk.PhotoImage(im)
+                    pv["frames"] = [ph]
+                    prev_lbl.config(image=ph, text=""); return
+                except Exception:
+                    pass
+            prev_lbl.config(image="", text="no preview")
+
+        def _load_preview(name, token):
+            # network in a worker; hop back to Tk via self.after
+            gif = png = None; author = ""
+            try:
+                s = sprite_cat.find(name)
+                if s:
+                    author = f"{s['name']} — by {s.get('author', '?')}"
+                    gif = sprite_cat.preview_gif(s["name"])
+                    png = sprite_cat.preview_png(s)
+            except Exception:
+                pass
+            self.after(0, _apply_preview, token, gif, png, author)
+
+        def show_sprite(*_):
+            name = _clean(sprite_var.get().strip())
+            pv["token"] += 1
+            _stop_anim()
+            _sync_fav_btn()
+            if not name or name == sprite_cat.RANDOM_SPRITE:
+                prev_lbl.config(image="", text="?"); author_lbl.config(text="surprise me")
+                return
+            prev_lbl.config(image="", text="loading…"); author_lbl.config(text="")
+            threading.Thread(target=_load_preview, args=(name, pv["token"]), daemon=True).start()
+
+        _type_job = [None]
+        def _on_type(_e):     # typing filters the open list + debounces the preview
+            _refresh_sprite_list()
+            if _type_job[0]:
+                try: self.after_cancel(_type_job[0])
+                except Exception: pass
+            _type_job[0] = self.after(500, show_sprite)
+        e_sprite.bind("<KeyRelease>", _on_type)
+        e_sprite.bind("<Down>", lambda _e: (_open_popup() if not pop["win"]
+                                            else pop["tree"].focus_set()))
+        def _on_return(_e):
+            tree = pop["tree"]
+            if tree and tree.winfo_exists() and tree.get_children():
+                _pick(tree.get_children()[0])     # top filtered hit
+            else:
+                show_sprite()
+        e_sprite.bind("<Return>", _on_return)
+
+        def _load_catalog():
+            try:
+                names = sprite_cat.sprite_names()
+            except Exception:
+                return   # offline with no cache: keep the typed-name fallback
+            def apply():
+                if win.winfo_exists():
+                    names_holder["names"] = names
+                    _refresh_sprite_list()
+            self.after(0, apply)
+        threading.Thread(target=_load_catalog, daemon=True).start()
+
+        def _load_icons():
+            """Fetch the portrait sheet (worker), then build the list icons on
+            the Tk thread in small chunks so the dialog never stutters."""
+            if Image is None:
+                return
+            try:
+                sheet_path = sprite_cat.spritesheet_png()
+                order = [s["name"] for s in sprite_cat.catalog()]
+            except Exception:
+                return
+            if not sheet_path:
+                return
+            def build():
+                if not win.winfo_exists():
+                    return
+                try:
+                    sheet = Image.open(sheet_path).convert("RGBA")
+                except Exception:
+                    return
+                cols = max(1, sheet.width // 16)
+                def cell_icon(idx):
+                    x, y = (idx % cols) * 16, (idx // cols) * 24
+                    if y + 24 > sheet.height:
+                        return None
+                    return ImageTk.PhotoImage(
+                        sheet.crop((x, y, x + 16, y + 24)).resize((32, 48), Image.NEAREST))
+                # cell 0 is the "??" placeholder — sprite i lives at cell i+1
+                icon0 = cell_icon(0)
+                if icon0:
+                    ICONS[sprite_cat.RANDOM_SPRITE] = icon0
+                def chunk(i=0):
+                    if not win.winfo_exists():
+                        return
+                    end = min(i + 64, len(order))
+                    for j in range(i, end):
+                        icon = cell_icon(j + 1)
+                        if icon:
+                            ICONS[order[j]] = icon
+                    if end < len(order):
+                        self.after(10, chunk, end)
+                    else:
+                        _refresh_sprite_list()    # icons appear if the list is open
+                chunk()
+            self.after(0, build)
+        threading.Thread(target=_load_icons, daemon=True).start()
+        show_sprite()
 
         qs = tk.BooleanVar(value=p["quickswap"])
         mu = tk.BooleanVar(value=p["music"])
         mr = tk.BooleanVar(value=p["msu1_resume"])
+        rf = tk.BooleanVar(value=p.get("random_favs", False))
+        ow = tk.BooleanVar(value=p.get("palette_shuffle_ow", False))
+        uw = tk.BooleanVar(value=p.get("palette_shuffle_uw", False))
+        npc = tk.BooleanVar(value=p.get("npc_reskin", False))
         for text, var in (("Quickswap items (L/R)", qs), ("In-ROM music", mu),
-                          ("MSU-1 resume after reset", mr)):
-            tk.Checkbutton(win, text=text, variable=var, fg=INK, bg=BG, selectcolor=PANEL2,
+                          ("MSU-1 resume after reset", mr),
+                          ("'Random' sprite rolls from favorites only", rf),
+                          ("Shuffle overworld palettes (Maseya-style recolor)", ow),
+                          ("Shuffle dungeon palettes", uw),
+                          ("Reskin the Zelda follower from a Link .zspr", npc)):
+            tk.Checkbutton(left, text=text, variable=var, fg=INK, bg=BG, selectcolor=PANEL2,
                            activebackground=BG, activeforeground=INK, font=("Segoe UI", 9),
                            anchor="w").pack(anchor="w", padx=12, pady=(6, 0))
 
+        e_zspr = self._path_row(left, "Follower .zspr (or 'Use picked sprite')",
+                                p.get("npc_zspr", ""), [("ZSPR sprite", "*.zspr"), ("All", "*.*")])
+
+        def use_picked():
+            name = _clean(sprite_var.get().strip())
+            if not name or name == sprite_cat.RANDOM_SPRITE:
+                return
+            def grab():
+                try:
+                    s = sprite_cat.find(name)
+                    path = sprite_cat.zspr_file(s) if s else None
+                except Exception:
+                    path = None
+                def fill():
+                    if not win.winfo_exists():
+                        return
+                    if path:
+                        e_zspr.delete(0, "end"); e_zspr.insert(0, path); npc.set(True)
+                    else:
+                        author_lbl.config(text=f"couldn't fetch {name}.zspr")
+                self.after(0, fill)
+            threading.Thread(target=grab, daemon=True).start()
+        self._button(left, "Use picked sprite", use_picked).pack(anchor="w", padx=16, pady=(6, 0))
+
         def save():
+            _stop_anim()
+            sp = _clean(sprite_var.get().strip()) or "Link"
+            if sp != sprite_cat.RANDOM_SPRITE:   # remember the last few picks
+                rec = [sp] + [n for n in self.cfg.get("sprite_recent", []) if n != sp]
+                self.cfg["sprite_recent"] = rec[:8]
             self.cfg["patch"] = {"heartspeed": hs.get(), "heartcolor": hc.get(),
                                  "menu_speed": ms.get(), "quickswap": qs.get(), "music": mu.get(),
-                                 "msu1_resume": mr.get(), "spritename": e_sprite.get().strip() or "Link"}
+                                 "msu1_resume": mr.get(), "random_favs": rf.get(),
+                                 "spritename": sp,
+                                 "palette_shuffle_ow": ow.get(), "palette_shuffle_uw": uw.get(),
+                                 "npc_reskin": npc.get(), "npc_zspr": e_zspr.get().strip()}
             save_settings(self.cfg)
             win.destroy()
+        def cancel():
+            _stop_anim(); win.destroy()
+        win.protocol("WM_DELETE_WINDOW", cancel)
         bar = tk.Frame(win, bg=BG); bar.pack(anchor="w", pady=12, **pad)
         self._button(bar, "Save", save, primary=True).pack(side="left")
-        self._button(bar, "Cancel", win.destroy).pack(side="left", padx=8)
+        self._button(bar, "Cancel", cancel).pack(side="left", padx=8)
 
     def _apply_msu(self, rom_path, pack_dir):
         """Copy an MSU-1 pack's *.pcm tracks next to the seed, renamed to match it,
@@ -2255,7 +2875,7 @@ class App(tk.Tk):
         if not copied:
             raise RuntimeError("MSU tracks aren't named '<name>-<n>.pcm'")
 
-    def _generate_seed_thread(self, base, preset_name):
+    def _generate_seed_thread(self, base, preset_name, permalink=""):
         import asyncio
         import pyz3r
         out_dir = os.path.join(HERE, "seeds")
@@ -2264,33 +2884,108 @@ class App(tk.Tk):
         msu = self.cfg.get("msu", {})
         music = patch.get("music", True)
         msu1_resume = patch.get("msu1_resume", False)
-        if msu.get("enable"):                     # MSU pack drives the audio
-            music = False
+        if msu.get("enable"):
+            # MSU-1 playback rides on the music engine: music must stay ON or
+            # the PCM tracks never trigger (music-off even breaks saving with
+            # MSU files present — sporchia/alttp_vt_randomizer#540).
+            music = True
             msu1_resume = True
 
+        # "random" cosmetics are re-rolled per seed, here at patch time
+        heartcolor = patch["heartcolor"]
+        if heartcolor == "random":
+            heartcolor = random.choice(HEARTCOLOR_POOL)
+        spritename = patch.get("spritename", "Link")
+        from agent.romtools import sprites as sprite_cat
+        if spritename == sprite_cat.RANDOM_SPRITE:
+            favs = self.cfg.get("sprite_favs", [])
+            if patch.get("random_favs") and favs:
+                spritename = random.choice(favs)
+            else:
+                try:
+                    spritename = random.choice(sprite_cat.sprite_names())
+                except Exception:
+                    spritename = "Link"
+
+        # progress lines go to the activity log live; warnings additionally
+        # ride along with "done" so the final popup can't be missed
+        warns = []
+        def step(msg):
+            self.seedgen_q.put(("progress", msg, ""))
+        def warn(msg):
+            warns.append(msg)
+            self.seedgen_q.put(("warn", msg, ""))
+
         async def make():
-            seed = await pyz3r.ALTTPR.generate(settings=preset_settings(preset_name),
-                                               endpoint="/api/randomizer")
+            if permalink:                         # patch a specific existing seed
+                hash_id = permalink.rstrip("/").split("/")[-1]
+                step(f"fetching seed {hash_id} from alttpr.com…")
+                seed = await pyz3r.ALTTPR.retrieve(hash_id=hash_id)
+            else:
+                step("requesting a new seed from alttpr.com…")
+                seed = await pyz3r.ALTTPR.generate(settings=preset_settings(preset_name),
+                                                   endpoint="/api/randomizer")
             hash_id = getattr(seed, "hash", None) or seed.url.rstrip("/").split("/")[-1]
             out = os.path.join(out_dir, f"{hash_id}.sfc")
+            step(f"patching base ROM (sprite: {spritename})…")
             await seed.create_patched_game(
                 input_filename=base, output_filename=out,
-                heartspeed=patch["heartspeed"], heartcolor=patch["heartcolor"],
-                spritename=patch.get("spritename", "Link"), music=music,
+                heartspeed=patch["heartspeed"], heartcolor=heartcolor,
+                spritename=spritename, music=music,
                 quickswap=patch.get("quickswap", True), menu_speed=patch["menu_speed"],
                 msu1_resume=msu1_resume)
             return out, seed.url
         try:
             out, url = asyncio.run(make())
-            if msu.get("enable") and msu.get("pack_dir"):
+            # local post-patch edits (ported from AlttprHelper) — failures here
+            # leave a playable ROM, so they warn instead of failing the seed
+            if patch.get("palette_shuffle_ow") or patch.get("palette_shuffle_uw"):
+                step("shuffling palettes…")
                 try:
-                    self._apply_msu(out, msu["pack_dir"])
+                    from agent.romtools.palette_shuffle import shuffle_palettes
+                    shuffle_palettes(out, overworld=patch.get("palette_shuffle_ow", False),
+                                     dungeon=patch.get("palette_shuffle_uw", False),
+                                     log=lambda m: None)
+                except ImportError:
+                    warn("palette shuffle needs `pip install maseya-z3pr` (in the app's .venv)")
                 except Exception as e:
-                    self.seedgen_q.put(("msuwarn", str(e), ""))
+                    warn(f"palette shuffle skipped: {e}")
+            if patch.get("npc_reskin") and patch.get("npc_zspr"):
+                step("reskinning the Zelda follower…")
+                try:
+                    from agent.romtools.npc_sprite import zspr_to_zelda
+                    zspr_to_zelda.convert(out, patch["npc_zspr"], out_rom=out,
+                                          log=lambda m: None)
+                except Exception as e:
+                    warn(f"follower reskin skipped: {e}")
+            if msu.get("enable"):
+                # resolve library + pack choice (Random rolls here, per seed)
+                lib = msu.get("library") or msu.get("pack_dir", "")
+                packs = msu_packs(lib)
+                if packs:
+                    want = msu.get("pack") or MSU_RANDOM
+                    if want == MSU_ROOT_LABEL:
+                        want = "."
+                    if want == MSU_RANDOM or want not in packs:
+                        want = random.choice(packs)
+                    shown = MSU_ROOT_LABEL if want == "." else want
+                    step(f"copying MSU-1 pack ({shown})…")
+                    try:
+                        self._apply_msu(out, lib if want == "." else os.path.join(lib, want))
+                    except Exception as e:
+                        warn(f"MSU pack not applied: {e}")
+                else:
+                    warn("no MSU packs found in the library folder (need *.pcm tracks)")
+            try:                                  # seed history, AlttprHelper-style
+                with open(os.path.join(out_dir, "seed_history.txt"), "a", encoding="utf-8") as f:
+                    f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  "
+                            f"{'permalink' if permalink else preset_name}  {url}  {out}\n")
+            except Exception:
+                pass
             self.cfg["rom_path"] = out
             self._remember_room_rom(out)
             save_settings(self.cfg)
-            self.seedgen_q.put(("done", out, url))
+            self.seedgen_q.put(("done", out, {"url": url, "warns": warns}))
         except Exception as e:
             self.seedgen_q.put(("error", str(e), ""))
 
@@ -2485,15 +3180,61 @@ class App(tk.Tk):
             except queue.Empty:
                 break
             if kind == "done":
+                self._set_seedgen_busy(False)
                 self._log(f"✓ Seed ready: {os.path.basename(a)} — click Launch.")
                 self._refresh_emu_summary()
-                messagebox.showinfo("HyruleLink",
-                    f"Seed generated and set as your ROM:\n{a}\n\nClick “Launch”.")
-            elif kind == "msuwarn":
-                self._log("⚠ MSU pack not applied: " + a)
+                info = _b if isinstance(_b, dict) else {}
+                extra = "".join(f"\n⚠ {w}" for w in info.get("warns", []))
+                if extra:
+                    extra = "\n\nApplied with warnings:" + extra
+                msg = f"Seed generated and set as your ROM:\n{a}{extra}\n\nClick “Launch”."
+                # New seed into a room that still has progression: fine for a
+                # mid-run re-roll, wrong for a group restart — say so, and hand
+                # the host the reset right here.
+                stale = self.room is not None and bool((self.state or {}).get("ledger"))
+                note = ("\n\nHeads up: this room still has progression from before — "
+                        "your new save will immediately receive your shared items.")
+                if stale and self._is_host():
+                    if messagebox.askyesno("HyruleLink",
+                            msg + note + "\n\nStarting the room over? Reset its progression "
+                            "now? (You'll confirm with the room code.)"):
+                        self._reset_room()
+                elif stale:
+                    messagebox.showinfo("HyruleLink",
+                        msg + note + " If the group is starting over, ask your host "
+                        "to use Reset progression.")
+                else:
+                    messagebox.showinfo("HyruleLink", msg)
+            elif kind == "progress":
+                self._log("… " + a)
+            elif kind in ("warn", "msuwarn"):
+                self._log("⚠ " + a)
             else:
+                self._set_seedgen_busy(False)
                 self._log("Seed generation failed: " + a)
                 messagebox.showerror("HyruleLink", "Couldn't generate a seed:\n" + a)
+        # auto-rejoin result (startup thread): enter the room, or clear the memory
+        while True:
+            try:
+                server, code, data, err = self.rejoin_q.get_nowait()
+            except queue.Empty:
+                break
+            if self.room is not None:      # user already joined something themselves
+                continue
+            if data:
+                self.base = server
+                self._enter_room(data)
+                self._log(f"Rejoined “{data.get('name') or code}” — picking up where you left off.")
+            else:
+                self.cfg.pop("last_room", None); save_settings(self.cfg)
+                if hasattr(self, "toast_lbl") and self.toast_lbl.winfo_exists():
+                    self.toast_lbl.config(text=f"Couldn't rejoin your last room — {err}")
+        # one-time "update available" note (start-screen toast + activity log)
+        if self.update_note and not self._update_noted:
+            self._update_noted = True
+            self._log("⬆ " + self.update_note)
+            if hasattr(self, "toast_lbl") and self.toast_lbl.winfo_exists():
+                self.toast_lbl.config(text="⬆ " + self.update_note)
         # State/board updates are pumped on a much faster loop (_pump_state) so the
         # board reflects a click within ~90ms instead of up to one 800ms tick.
 

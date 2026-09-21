@@ -8,6 +8,10 @@ websocket-client==1.9.0
 # Player app: in-app ALTTPR seed generation
 pyz3r==6.1.0
 
+# Player app: Maseya-style overworld/dungeon palette shuffle (same algorithm
+# alttpr.com uses). Optional — the toggle warns instead of failing without it.
+maseya-z3pr==1.0.0rc1
+
 # Player app: item sprites in the board (scaled/dimmed via Pillow). Optional —
 # the app still runs without it, just without icons.
 Pillow==12.2.0

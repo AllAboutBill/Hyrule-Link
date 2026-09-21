@@ -33,6 +33,14 @@ transport, including SNI/real hardware. Messages also appear on RetroArch's
 OSD and as a toast + activity line in the desktop app. Placement is
 verifiable/tunable with `python -m tools.hud_text_test "YOUR TEXT"`.
 
+*One writer per strip.* When BillognaBot (the streaming bot) runs on the same
+PC it writes its own lines to that strip (bits, points, welcomes…), so the
+agent hands its messages to the bot's `POST http://127.0.0.1:5000/api/hud/say`
+instead of racing it cell-for-cell. The bot replies `shown:false` when it
+can't draw (its emulator link is down) and the agent draws locally; when the
+bot isn't running at all the agent draws locally and doesn't knock again for
+30 s. `HYRULELINK_BOT_HUD=0` turns forwarding off (or set it to another URL).
+
 **Save-aware syncing.** The agent only writes items while a save is actually
 loaded (`MODE` `$7E0010` in a playable module) — grants/revokes that arrive at
 the title screen or file select are queued and applied when gameplay resumes.
