@@ -10,6 +10,12 @@ __pycache__/
 
 # Server secrets / env (admin key, etc.) — never commit
 .env
+# operator page key (server/operator.key, or wherever HYRULELINK_OPERATOR_KEY_FILE points)
+server/operator.key
+*.key
+
+# deploy/deploy.sh rollback marker (droplet side)
+.deploy-prev
 
 # Local agent config & secrets (contain player tokens + machine paths)
 agent/config.json
