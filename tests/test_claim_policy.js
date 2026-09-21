@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("assert");
-const { canClaim } = require("../web/claim-policy.js");
+const { canClaim } = require("../web/js/claim-policy.js");
 
 const base = { owner: 1, discovered: [1], locked: false };
 assert.strictEqual(canClaim(base, { require_found_to_claim: true }, 2), false);

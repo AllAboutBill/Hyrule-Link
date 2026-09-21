@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>HyruleLink</title>
+<link rel="icon" href="img/mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/hyrulelink.css">
+</head>
+<body class="room">
+<nav class="sitebar" aria-label="billogna.lol"><div class="sb-in">
+  <a class="sb-home" href="https://www.billogna.lol/" target="_blank" rel="noopener"><b aria-hidden="true">&larr;</b>billogna.lol</a>
+  <span class="sb-sibs"><a href="https://www.billogna.lol/ethernet/" target="_blank" rel="noopener">EtherNet</a><a href="https://www.billogna.lol/connect/" target="_blank" rel="noopener">QuakeCast</a><a href="./" target="_blank" rel="noopener" aria-current="page">HyruleLink</a></span>
+</div></nav>
+
+<header class="bar">
+  <a class="brand" href="./" title="HyruleLink home">
+    <img src="img/hookshot.svg" width="32" height="32" alt="">
+    <span class="word">Hyrule<b>Link</b></span>
+  </a>
+  <div class="bar-title">
+    <h1 id="roomTitle">&nbsp;</h1>
+    <span class="label" id="roomCount"></span>
+  </div>
+  <div class="bar-right">
+    <span class="net-lamp" id="netLamp" title="Connection to the room"></span>
+    <button class="code-chip" id="btnInvite" type="button" title="Copy the invite link" hidden>
+      <b id="roomCode"></b><span id="inviteWord">Copy invite</span>
+    </button>
+    <button class="btn small quiet" id="btnSettings" type="button" hidden>Settings</button>
+  </div>
+</header>
+
+<main class="layout" id="layout" hidden>
+  <section class="stage">
+
+    <div class="panel banner" id="watchBanner" hidden>
+      <span id="watchText">You are watching. Only players can claim items.</span>
+      <button class="btn small primary" id="btnWatchJoin" type="button" hidden>Join as a player</button>
+    </div>
+
+    <div class="panel seed-line" id="seedLine">
+      <span class="label">Seed</span><a href="https://alttpr.com/" target="_blank" rel="noopener">Bring your own from alttpr.com</a>
+    </div>
+
+    <div class="panel links" id="links" hidden>
+      <div class="link" id="linkGame">
+        <div class="what"><span class="lamp" id="gameLamp"></span>Game</div>
+        <div class="say" id="gameSay">Looking for SNI or QUsb2Snes on this PC.</div>
+        <div class="do" id="gameDo"></div>
+      </div>
+      <div class="link" id="linkLine" hidden>
+        <div class="what"><span class="lamp" id="lineLamp"></span>Last line</div>
+        <div class="say"><div class="strip idle" id="lineStrip"></div><small id="lineNote"></small></div>
+        <div class="do"></div>
+      </div>
+    </div>
+
+    <div class="mode-banner" id="modeBanner" hidden>
+      <b class="mode" id="modeName"></b><span class="summary" id="modeSummary"></span>
+      <span class="next" id="modeNext" hidden>Next shuffle <b id="modeNextClock"></b></span>
+    </div>
+
+    <div class="grid" id="grid" aria-label="Items"></div>
+
+    <details class="panel host" id="hostPanel" open hidden>
+      <summary class="panel-head"><h2>Host</h2><span class="label">Only you see this</span></summary>
+      <div class="panel-body">
+        <div class="set"><div class="k">Room name</div>
+          <form class="row" id="hostNameForm" autocomplete="off"><input class="field" id="hostName" maxlength="60" aria-label="Room name"><button class="btn small" id="hostRename" type="submit">Rename</button></form></div>
+        <div class="set"><div class="k">Mode<small>Hot Potato passes each item to the next finder on a timer. Chaos reshuffles every found item on a timer. Both turn claiming off.</small></div>
+          <select class="field" id="hostMode" aria-label="Mode">
+            <option value="normal">Normal</option>
+            <option value="hot_potato">Hot Potato</option>
+            <option value="chaos">Chaos</option>
+            <option value="custom">Custom</option>
+          </select></div>
+        <div class="set" id="hostTimingRow"><div class="k" id="hostTimingLabel">Steal cooldown</div>
+          <div class="row">
+            <input class="field num" id="hostCooldown" type="number" min="0" max="3600" step="1" aria-label="Steal cooldown in seconds">
+            <input class="field num" id="hostShuffle" type="number" min="5" max="86400" step="5" aria-label="Interval in seconds" hidden>
+            <span class="unit">s</span>
+            <button class="btn small" id="hostModeApply" type="button">Apply</button>
+          </div></div>
+        <div class="set" id="hostCustomRow" hidden><div class="k">Custom rules<small>Pick a preset or set every rule yourself.</small></div>
+          <button class="btn small" id="hostCustomize" type="button">Customize ruleset</button></div>
+        <div class="set wide"><div class="k">Players<small>On any item, click a name to mark it found or not found. Shift-click makes them the holder, or clears it.</small></div>
+          <ul class="players" id="hostPlayers"></ul></div>
+        <div class="set"><div class="k">Reset progression<small>Wipes every item, find and claim. Players and settings stay. Type RESET to confirm.</small></div>
+          <div class="row"><input class="field" id="hostResetWord" maxlength="5" placeholder="RESET" aria-label="Type RESET to confirm" autocomplete="off"><button class="btn small danger" id="hostReset" type="button" disabled>Reset</button></div></div>
+      </div>
+    </details>
+  </section>
+
+  <aside class="side">
+    <section class="panel">
+      <div class="panel-head"><h2>Players</h2><span class="label" id="playersCount"></span></div>
+      <div class="panel-body"><ul class="players" id="players"></ul></div>
+    </section>
+    <section class="panel">
+      <div class="panel-head"><h2>Activity</h2><span class="label">Newest first</span></div>
+      <div class="panel-body"><ul class="log" id="log" aria-live="polite"></ul><p class="empty" id="logEmpty">Nothing yet.</p></div>
+    </section>
+  </aside>
+</main>
+
+<!-- no seat in this room on this browser yet -->
+<div class="cover" id="joinCover" hidden>
+  <form class="panel" id="joinForm" autocomplete="off">
+    <p class="label" id="joinLabel"></p>
+    <h2>Join the room</h2>
+    <p class="sub" id="joinSub"></p>
+    <input class="field" id="joinName" maxlength="40" placeholder="Your name" aria-label="Your name" required>
+    <button class="btn primary big" id="btnJoin" type="submit">Join as a player</button>
+    <button class="btn quiet" id="btnJustWatch" type="button">Just watch</button>
+    <p class="err" id="joinErr" hidden></p>
+  </form>
+</div>
+
+<!-- the room is gone, or the server is not answering -->
+<div class="cover" id="msgCover" hidden>
+  <div class="panel">
+    <h2 id="msgTitle">That room is gone</h2>
+    <p class="sub" id="msgSub">No room has that code. Rooms are forgotten two weeks after the last activity.</p>
+    <a class="btn primary" id="msgHome" href="./">Open a new room</a>
+    <button class="btn quiet" id="msgRetry" type="button" hidden>Try again</button>
+  </div>
+</div>
+
+<dialog id="dlgSettings">
+  <div class="dlg-head"><h2>Settings</h2><button class="btn small quiet" data-close type="button">Close</button></div>
+  <div class="dlg-body">
+    <h3>This browser</h3>
+    <div class="set"><div class="k">Link a game on this browser<small>Off: this page does not look for a bridge and never registers as your game.</small></div>
+      <label class="switch"><input type="checkbox" role="switch" id="setLink"><span id="setLinkWord">On</span></label></div>
+    <div class="set"><div class="k">In-game messages<small>Off: no HUD lines. Items are still applied.</small></div>
+      <label class="switch"><input type="checkbox" role="switch" id="setHud"><span id="setHudWord">On</span></label></div>
+    <div class="set"><div class="k">Leave the room<small>Forgets your seat on this browser. What you hold stays in the room.</small></div>
+      <button class="btn small danger" id="btnLeave" type="button">Leave</button></div>
+    <div id="setHost" hidden>
+      <h3>The room (host)</h3>
+      <div class="set"><div class="k">Host controls<small>Name, mode, cooldown, rules, players and reset are in the Host panel under the items.</small></div>
+        <button class="btn small" id="btnShowHost" type="button">Show</button></div>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="dlgGame">
+  <div class="dlg-head"><h2>Linking your game</h2><button class="btn small quiet" data-close type="button">Close</button></div>
+  <div class="dlg-body">
+    <ol class="how">
+      <li><div><b>Run SNI or QUsb2Snes, not both.</b> They use the same port, so the second one to start says the port is already in use. If you use an auto-tracker you already have one of them. Otherwise get
+        <a href="https://github.com/alttpo/sni/releases/latest" target="_blank" rel="noopener">SNI</a>, unzip it, and run <span class="mono">sni.exe</span>. It sits in the tray; there is nothing to configure. A web page cannot talk to an emulator by itself, NWA or otherwise, so this is the one program you need.</div></li>
+      <li><div><b>Start your game the way your tracker needs it.</b>
+        <table>
+          <tr><td>snes9x-nwa, bsnes-plus</td><td>Nothing to do. SNI and QUsb2Snes find NWA emulators by themselves.</td></tr>
+          <tr><td>RetroArch</td><td>Settings, Network, Network Commands: on (port 55355).</td></tr>
+          <tr><td>BizHawk, snes9x-rr</td><td>Open the Lua console and load <span class="mono">Connector.lua</span> from SNI's <span class="mono">lua</span> folder.</td></tr>
+          <tr><td>FXPak Pro / SD2SNES</td><td>USB cable in, console on.</td></tr>
+        </table></div></li>
+      <li><div><b>Come back here.</b> This page finds the game on its own within a few seconds. If the browser asks whether this site may reach devices or apps on your local network, allow it: the game is on your PC, and that is the only way a web page can reach it.</div></li>
+    </ol>
+    <h3>Good to know</h3>
+    <p>This page reads your inventory bytes and the game module every half second, and writes items, the run flag for the boots, the bow and arrow bytes, and the HUD strip. Nothing else is read or written, and nothing leaves your PC but the item names it finds.</p>
+    <p>One game link per player: linking on a second browser, or with the desktop app, takes over from this one. Works in Chrome, Edge and Firefox. Safari does not let a web page talk to a program on the same computer.</p>
+  </div>
+</dialog>
+
+<dialog id="dlgRules" class="wide">
+  <div class="dlg-head"><h2>Custom ruleset</h2><button class="btn small quiet" data-close type="button">Close</button></div>
+  <div class="dlg-body" id="rulesBody">
+    <div class="rules-presets" id="rulesPresets"><span class="label">Start from</span></div>
+    <p class="rules-summary" id="rules-summary"></p>
+    <div class="rules-grid">
+      <fieldset><legend>Claiming and stealing</legend>
+        <label><input type="checkbox" id="r-claiming"> Allow manual claiming</label>
+        <label><input type="checkbox" id="r-found"> Must have found it to claim</label>
+        <label id="r-openseason-wrap">Open season on <select class="field" id="r-openseason"><option value="owned">only items someone holds</option><option value="any">anything</option></select></label>
+        <label>Steal cooldown <input class="field num" type="number" id="r-cd" min="0" step="1"> <span class="unit">s</span></label>
+        <label>Cooldown applies to <select class="field" id="r-cdscope"><option value="item">the item</option><option value="thief">the thief</option><option value="victim">the victim (a shield)</option><option value="none">nobody</option></select></label>
+        <label>Steal-back lock <input class="field num" type="number" id="r-sbl" min="0" step="1"> <span class="unit">s</span></label>
+        <label>Max steals per player per minute <input class="field num" type="number" id="r-budget" min="0" step="1"> <span class="unit">0 = no limit</span></label>
+      </fieldset>
+      <fieldset><legend>Holding</legend>
+        <label>Hold limit <input class="field num" type="number" id="r-hold" min="0" step="5"> <span class="unit">s, 0 = off</span></label>
+        <label id="r-holdexp-wrap">On expiry <select class="field" id="r-holdexp"><option value="next_finder">pass to the next finder</option><option value="release">release to the pool</option><option value="return_finder">return to the first finder</option></select></label>
+        <label>Unstealable after <input class="field num" type="number" id="r-tenure" min="0" step="5"> <span class="unit">s, 0 = off</span></label>
+        <label>Drop items when offline <input class="field num" type="number" id="r-idle" min="0" step="5"> <span class="unit">s, 0 = off</span></label>
+      </fieldset>
+      <fieldset id="r-raid-wrap"><legend>Raid</legend>
+        <p class="hint">Active when "must have found it" is off.</p>
+        <label>Borrow for <input class="field num" type="number" id="r-borrow" min="0" step="5"> <span class="unit">s, 0 = for good</span></label>
+        <label id="r-borrowrev-wrap">Then back to <select class="field" id="r-borrowrev"><option value="prev_owner">the previous holder</option><option value="pool">the pool</option></select></label>
+      </fieldset>
+      <fieldset><legend>Layers</legend>
+        <label>Reshuffle every <input class="field num" type="number" id="r-shuffle" min="0" step="5"> <span class="unit">s, 0 = off</span></label>
+        <label id="r-shufscope-wrap">Reshuffle <select class="field" id="r-shufscope"><option value="all">every found item</option><option value="unowned">only items nobody holds</option><option value="idle">only items held a full round</option></select></label>
+        <label><input type="checkbox" id="r-shared"> Shared discovery: one find lets everyone claim</label>
+      </fieldset>
+    </div>
+  </div>
+  <div class="dlg-foot"><button class="btn quiet" id="rules-cancel" type="button">Cancel</button><button class="btn primary" id="rules-apply" type="button">Apply ruleset</button></div>
+</dialog>
+
+<div class="toasts" id="toasts" aria-live="assertive"></div>
+
+<script src="js/items.js"></script>
+<script src="js/effects.js"></script>
+<script src="js/agent.js"></script>
+<script src="js/hud.js"></script>
+<script src="js/snes.js"></script>
+<script src="js/claim-policy.js"></script>
+<script src="js/game.js"></script>
+<script src="js/room.js"></script>
+</body>
+</html>
