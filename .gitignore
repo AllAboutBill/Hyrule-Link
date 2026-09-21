@@ -14,8 +14,14 @@ __pycache__/
 server/operator.key
 *.key
 
-# deploy/deploy.sh rollback marker (droplet side)
+# deploy/deploy.sh markers (droplet side): the rollback commit, the unit that
+# deploy replaced, and a deploy that has not finished
 .deploy-prev
+.deploy-prev.service
+.deploy-pending
+
+# Claude Code agent worktrees
+.claude/worktrees/
 
 # Local agent config & secrets (contain player tokens + machine paths)
 agent/config.json
