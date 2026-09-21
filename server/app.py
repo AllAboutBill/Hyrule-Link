@@ -6,11 +6,17 @@ both player agents and browsers dial out to. Run remotely (e.g. your droplet)
 so every remote player can reach it.
 
     uvicorn server.app:app --host 0.0.0.0 --port 5019
+
+web/ is served at the root (and at /static, kept for older links) by a mount
+that must stay the LAST thing registered: every route has to be added above it
+or the mount answers first. The desktop app's routes (docs/BROWSER_PLAN.md 4.2)
+keep their exact shape; only new fields and routes are added.
 """
 
 import asyncio
 import logging
 import math
+import mimetypes
 import os
 import time
 
@@ -37,14 +43,34 @@ _load_dotenv()
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import MutableHeaders
+from starlette.websockets import WebSocketClose
 
-from server import db, auth, names
+from server import db, auth, names, operator
 from server.rate_limit import RateLimiter, client_key
 from server.ledger import hub, resolve_pickup, resolve_claim, ownership_commands
 from shared import protocol as P
 from shared.items import ITEMS, item_image
 
-WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+WEB_DIR = os.path.join(_ROOT, "web")
+
+
+def _read_version() -> str:
+    try:
+        with open(os.path.join(_ROOT, "VERSION"), encoding="utf-8") as f:
+            return f.read().strip() or "unknown"
+    except OSError:
+        return "unknown"
+
+
+VERSION = _read_version()
+
+# Windows can map these to text/plain through the registry, and with nosniff a
+# browser then refuses the script or stylesheet. Say what they are.
+for _type, _ext in (("text/javascript", ".js"), ("text/css", ".css"), ("image/svg+xml", ".svg"),
+                    ("font/woff2", ".woff2"), ("font/ttf", ".ttf")):
+    mimetypes.add_type(_type, _ext)
 
 app = FastAPI(title="HyruleLink")
 db.init()
@@ -55,6 +81,54 @@ ROOM_TTL_DAYS = float(os.environ.get("HYRULELINK_ROOM_TTL_DAYS", "14"))
 _CREATE_LIMIT = RateLimiter(10, 60)
 _JOIN_LIMIT = RateLimiter(20, 60)
 _DEVICE_LIMIT = RateLimiter(10, 60)
+_LOOKUP_LIMIT = RateLimiter(120, 60)
+
+_LONG_CACHE = (".png", ".svg", ".woff2", ".ttf", ".ico")
+
+
+class _Headers:
+    """Cache and safety headers on every HTTP response. Sprites, fonts and
+    icons cache for a week; everything else revalidates. No referrer leaves a
+    page (a room link is a key), and the operator page cannot be framed."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                if path.endswith(_LONG_CACHE) and message.get("status", 200) < 400:
+                    headers.setdefault("Cache-Control", "public, max-age=604800")
+                else:
+                    headers["Cache-Control"] = "no-cache"
+                headers.setdefault("X-Content-Type-Options", "nosniff")
+                headers.setdefault("Referrer-Policy", "no-referrer")
+                if path.endswith("operator.html"):
+                    headers["X-Frame-Options"] = "DENY"
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+app.add_middleware(_Headers)
+
+
+class _WebFiles(StaticFiles):
+    """StaticFiles that refuses a WebSocket to an unknown path the way the
+    router would (a close), instead of tripping StaticFiles' http-only assert
+    now that web/ is mounted at the root."""
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await WebSocketClose()(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
 
 
 def _rate_limit(request: Request, limiter: RateLimiter, action: str):
@@ -212,6 +286,27 @@ def api_me(request: Request):
 def list_rooms():
     """Public list of live rooms for the 'watch' picker on the home page."""
     return {"rooms": db.list_rooms(), "login_enabled": auth.LOGIN_ENABLED}
+
+
+@app.get("/api/rooms/{code}")
+def room_lookup(code: str, request: Request):
+    """A room by its join code (any case): what a page needs before it has a
+    seat. Does not count as activity (no touch_room)."""
+    _rate_limit(request, _LOOKUP_LIMIT, "room-lookup")
+    code = code.upper()
+    row = db.get_room(code)
+    if not row:
+        raise HTTPException(404, "no such room")
+    return {
+        "code": code,
+        "pub_id": row["pub_id"],
+        "name": row["name"],
+        "host": row["host_player_id"],
+        "mode": row["mode"],
+        "cooldown_s": row["cooldown_s"],
+        "players": [{"id": p["id"], "name": p["display_name"]} for p in db.room_players(code)],
+        "live": {"uis": len(hub.uis.get(code, {})), "agents": len(hub.agents.get(code, {}))},
+    }
 
 
 @app.post("/api/rooms/{handle}/delete")
@@ -498,5 +593,32 @@ def health():
     return {"ok": True, "ts": time.time()}
 
 
+@app.get("/api/health")
+def api_health():
+    return {"ok": True, "version": VERSION, "rooms": len(hub.rooms), "ts": time.time()}
+
+
+# ── operator (web global-admin, behind a key file; see server/operator.py) ──
+@app.get("/api/operator/rooms")
+async def operator_rooms(request: Request):
+    operator.check(request)
+    return operator.rooms_doc(hub, ROOM_TTL_DAYS)
+
+
+@app.post("/api/operator/rooms/{code}/delete")
+async def operator_delete_room(code: str, request: Request):
+    operator.check(request)
+    code = code.upper()
+    if not db.get_room(code):
+        raise HTTPException(404, "no such room")
+    live = len(hub.agents.get(code, {})) + len(hub.uis.get(code, {}))
+    await hub.drop_room(code)    # close live connections + forget in memory
+    db.delete_room(code)         # then remove persisted rows
+    print(f"[operator] deleted room {code} ({live} connection(s) closed)")
+    return {"ok": True, "deleted": code}
+
+
+# ── web/ at the root: keep this LAST (it matches every path) ─────────────────
 if os.path.isdir(WEB_DIR):
-    app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
+    app.mount("/static", _WebFiles(directory=WEB_DIR), name="static")
+    app.mount("/", _WebFiles(directory=WEB_DIR, html=True), name="web")
