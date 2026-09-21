@@ -139,8 +139,18 @@ the older registration; the older socket is not closed and gets no more
 commands, though a `pickup` it sends still counts. Its `status` is ignored,
 and its close changes nothing. Only the registered socket closing records the
 player as unlinked (`agent` and `emu` false) and starts their offline clock.
-The page keeps out of this by opening its agent socket only after it finds a
-game, and only with *Link a game on this browser* on.
+The page keeps out of this where it can. It opens its agent socket only after
+it finds a game, only with *Link a game on this browser* on, and only in one
+tab per room per browser: `HLGame.link` (`web/js/game.js`) runs the whole
+linked lifetime (bridge, agent socket, HUD) inside the Web Lock
+`hyrulelink.link.<CODE>` (`navigator.locks`). Another tab of the same room
+waits in the lock's queue with no bridge and no socket, and links when the
+holder lets go (link switched off, Leave, tab closed). *Link this tab instead*
+requests the lock with `steal`; the robbed tab sends `bye`, closes its socket
+and the bridge, and queues again. It never steals back. Without
+`navigator.locks` (plain http off localhost, an old browser) every tab links,
+as before. Other browsers, devices and the desktop app are not covered: there
+the newest hello wins.
 
 ### The ui socket
 

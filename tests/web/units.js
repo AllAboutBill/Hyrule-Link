@@ -937,6 +937,314 @@ test('game: a line is on the HUD only with a game linked, lines on and a save lo
   });
 });
 
+/* ---- game.js link(): one game link per room per browser ---- */
+
+/* navigator.locks as Chrome runs it, for exclusive locks: a grant runs the
+   callback in a later task and holds until the callback's promise settles;
+   ifAvailable answers null when it is taken or anyone is queued; steal
+   rejects the holder's request with AbortError and preempts the queue; a
+   signal takes a queued request out of line. */
+function fakeLocks() {
+  const held = new Map(), queues = new Map();
+  const line = name => { if (!queues.has(name)) queues.set(name, []); return queues.get(name); };
+  const abortError = () => { const e = new Error('The request was aborted.'); e.name = 'AbortError'; return e; };
+  const L = {
+    log: [],
+    holder: name => (held.has(name) ? held.get(name).req.who : null),
+    waiting: name => line(name).length
+  };
+  function grant(req) {
+    const lease = { req };
+    held.set(req.name, lease);
+    setImmediate(() => {
+      Promise.resolve().then(() => req.cb({ name: req.name, mode: 'exclusive' })).then(
+        v => settle(lease, () => req.resolve(v)), e => settle(lease, () => req.reject(e)));
+    });
+  }
+  function settle(lease, done) {
+    if (held.get(lease.req.name) !== lease) return;     // stolen: already rejected
+    held.delete(lease.req.name);
+    done();
+    const next = line(lease.req.name).shift();
+    if (next) grant(next);
+  }
+  L.request = (name, opts, cb) => {
+    if (typeof opts === 'function') { cb = opts; opts = {}; }
+    L.log.push({ name, steal: !!opts.steal, ifAvailable: !!opts.ifAvailable, signal: !!opts.signal });
+    if (opts.steal && (opts.ifAvailable || opts.signal)) return Promise.reject(new Error('NotSupportedError'));
+    return new Promise((resolve, reject) => {
+      const req = { name, cb, resolve, reject, who: cb };
+      if (opts.steal) {
+        const cur = held.get(name);
+        if (cur) { held.delete(name); cur.req.reject(abortError()); }
+        grant(req);
+      } else if (held.has(name) || line(name).length) {
+        if (opts.ifAvailable) {
+          setImmediate(() => { Promise.resolve().then(() => cb(null)).then(resolve, reject); });
+          return;
+        }
+        if (opts.signal) opts.signal.addEventListener('abort', () => {
+          const i = line(name).indexOf(req);
+          if (i >= 0) { line(name).splice(i, 1); reject(abortError()); }
+        });
+        line(name).push(req);
+      } else {
+        grant(req);
+      }
+    });
+  };
+  return L;
+}
+
+/* One browser: a fake bridge (Snes), agent and room socket for game.js to
+   start, counted, so a test can see which tab opened what. */
+async function withTabs(fn) {
+  const saved = { Snes: global.Snes, HLAgent: global.HLAgent, WebSocket: global.WebSocket };
+  const w = { snes: [], sockets: [] };
+  function FakeSnes(o) {
+    this.o = o; this.state = 'searching'; this.started = false; this.stopped = false;
+    this.hud = { active: () => false, abort: async () => true };
+    w.snes.push(this);
+  }
+  FakeSnes.prototype.start = function () { this.started = true; };
+  FakeSnes.prototype.stop = function () { this.stopped = true; };
+  FakeSnes.prototype.say = () => true;
+  FakeSnes.prototype.attach = function () { this.state = 'attached'; this.o.onStatus(this); };
+  function FakeAgent() { this.handled = []; }
+  FakeAgent.prototype.onServerOpen = function () {};
+  FakeAgent.prototype.onGameAttached = function () {};
+  FakeAgent.prototype.onGameLost = function () {};
+  FakeAgent.prototype.tick = async function () {};
+  FakeAgent.prototype.handle = function (m) { this.handled.push(m); };
+  function FakeSocket(url) {
+    this.url = url; this.readyState = 0; this.sent = [];
+    w.sockets.push(this);
+    setImmediate(() => { if (this.readyState === 0) { this.readyState = 1; this.onopen({}); } });
+  }
+  FakeSocket.prototype.send = function (data) { this.sent.push(JSON.parse(data)); };
+  FakeSocket.prototype.close = function () {
+    if (this.readyState === 3) return;
+    this.readyState = 3;
+    setImmediate(() => this.onclose && this.onclose({}));
+  };
+  global.Snes = FakeSnes;
+  global.HLAgent = { Agent: FakeAgent };
+  global.WebSocket = FakeSocket;
+  const locks = fakeLocks();
+  w.locks = locks;
+  w.settle = async () => { for (let i = 0; i < 12; i++) await new Promise(r => setImmediate(r)); };
+  w.tab = (code, extra) => {
+    const t = { states: [], agentSockets: [] };
+    t.h = HLGame.link(Object.assign({
+      room: { code: code || 'ABCDEFGH23', player_id: 1, player_token: 'tok' },
+      wsUrl: 'ws://room.test/ws', hud: true, locks,
+      onLock: s => t.states.push(s),
+      onAgentSocket: open => t.agentSockets.push(open)
+    }, extra || {}));
+    return t;
+  };
+  w.hellos = () => w.sockets.filter(s => s.sent.some(m => m.type === 'hello'));
+  w.open = () => w.sockets.filter(s => s.readyState === 1);
+  try { await fn(w); } finally { Object.assign(global, saved); }
+}
+
+test('link: a second tab of the room waits without a bridge or a socket, and links when the first lets go', () =>
+  withTabs(async (w) => {
+    const a = w.tab();
+    assert.strictEqual(a.h.state, 'asking');
+    await w.settle();
+    assert.strictEqual(a.h.state, 'linked');
+    assert.strictEqual(w.snes.length, 1);
+    assert.ok(a.h.snes && a.h.snes.started);
+    a.h.snes.attach();
+    await w.settle();
+    assert.strictEqual(w.hellos().length, 1);
+    assert.ok(a.h.agentOpen());
+
+    const b = w.tab();
+    await w.settle();
+    assert.strictEqual(b.h.state, 'waiting');
+    assert.deepStrictEqual(b.states, ['waiting']);
+    assert.strictEqual(b.h.snes, null);
+    assert.strictEqual(b.h.agentOpen(), false);
+    assert.strictEqual(w.snes.length, 1, 'the waiting tab made no bridge');
+    assert.strictEqual(w.sockets.length, 1, 'the waiting tab opened no socket');
+    assert.strictEqual(w.locks.log.filter(r => r.steal).length, 0);
+
+    const first = a.h.snes, sock = w.hellos()[0];
+    await a.h.stop();                                  // link switched off, or Leave
+    await w.settle();
+    assert.strictEqual(a.h.state, 'stopped');
+    assert.ok(first.stopped);
+    assert.deepStrictEqual(sock.sent.map(m => m.type), ['hello', 'bye']);
+    assert.strictEqual(b.h.state, 'linked');
+    assert.deepStrictEqual(b.states, ['waiting', 'linked']);
+    assert.strictEqual(w.snes.length, 2);
+    b.h.snes.attach();
+    await w.settle();
+    assert.strictEqual(w.open().length, 1);
+    assert.strictEqual(w.open()[0], w.hellos()[1]);
+    assert.strictEqual(w.hellos()[1].sent[0].player_id, 1);
+    await b.h.stop(true);
+  }));
+
+test('link: taking over stops the holder cleanly, and it waits instead of taking it back', () =>
+  withTabs(async (w) => {
+    const a = w.tab();
+    await w.settle();
+    a.h.snes.attach();
+    const b = w.tab();
+    await w.settle();
+    assert.strictEqual(b.h.state, 'waiting');
+    const aSnes = a.h.snes, aSock = w.hellos()[0];
+
+    b.h.takeOver();
+    b.h.takeOver();                                    // a double click steals once
+    await w.settle();
+    assert.strictEqual(w.locks.log.filter(r => r.steal).length, 1);
+    assert.strictEqual(b.h.state, 'linked');
+    assert.strictEqual(a.h.state, 'waiting');
+    assert.deepStrictEqual(a.states, ['linked', 'waiting']);
+    assert.ok(aSnes.stopped, 'the robbed tab let go of the bridge');
+    assert.deepStrictEqual(aSock.sent.map(m => m.type), ['hello', 'bye']);
+    assert.strictEqual(aSock.readyState, 3);
+    assert.strictEqual(a.h.snes, null);
+    assert.strictEqual(a.agentSockets[a.agentSockets.length - 1], false);
+    assert.strictEqual(w.locks.waiting(HLGame.LOCK_PREFIX + 'ABCDEFGH23'), 1, 'the robbed tab is back in line');
+
+    b.h.snes.attach();
+    await w.settle();
+    const made = w.snes.length, sockets = w.sockets.length;
+    for (let i = 0; i < 5; i++) await w.settle();
+    assert.strictEqual(a.h.state, 'waiting', 'the robbed tab did not take it back');
+    assert.strictEqual(b.h.state, 'linked');
+    assert.strictEqual(w.snes.length, made);
+    assert.strictEqual(w.sockets.length, sockets);
+    assert.strictEqual(w.locks.log.filter(r => r.steal).length, 1, 'no steal but the click');
+    assert.strictEqual(w.open().length, 1);
+
+    a.h.takeOver();                                    // a click in the first tab moves it back
+    await w.settle();
+    assert.strictEqual(a.h.state, 'linked');
+    assert.strictEqual(b.h.state, 'waiting');
+    assert.strictEqual(w.locks.log.filter(r => r.steal).length, 2);
+
+    await a.h.stop();                                  // and the tab in line takes over
+    await w.settle();
+    assert.strictEqual(b.h.state, 'linked');
+    await b.h.stop(true);
+  }));
+
+test('link: a tab stopped while it waits leaves the line and never links', () =>
+  withTabs(async (w) => {
+    const a = w.tab();
+    await w.settle();
+    const b = w.tab();
+    await w.settle();
+    assert.strictEqual(b.h.state, 'waiting');
+    await b.h.stop();
+    assert.strictEqual(w.locks.waiting(HLGame.LOCK_PREFIX + 'ABCDEFGH23'), 0);
+    b.h.takeOver();
+    await a.h.stop();
+    await w.settle();
+    assert.strictEqual(b.h.state, 'stopped');
+    assert.strictEqual(w.snes.length, 1);
+    assert.strictEqual(w.locks.holder(HLGame.LOCK_PREFIX + 'ABCDEFGH23'), null);
+  }));
+
+test('link: with no AbortController a stale place in line is let go when it comes up', () =>
+  withTabs(async (w) => {
+    const AC = global.AbortController;
+    global.AbortController = undefined;
+    try {
+      const name = HLGame.LOCK_PREFIX + 'ABCDEFGH23';
+      const a = w.tab();
+      await w.settle();
+      const b = w.tab(), c = w.tab();
+      await w.settle();
+      assert.strictEqual(w.locks.waiting(name), 2);
+      await b.h.stop();                                // cannot leave the line: it lets go on its turn
+      c.h.takeOver();                                  // nor can c's old place; the steal wins
+      await w.settle();
+      assert.strictEqual(c.h.state, 'linked');
+      assert.strictEqual(a.h.state, 'waiting');
+      await c.h.stop();
+      await w.settle();
+      assert.strictEqual(a.h.state, 'linked', 'b and c let their stale places go');
+      assert.strictEqual(b.h.state, 'stopped');
+      assert.strictEqual(w.snes.length, 3, 'a, c, then a again; never b');
+      await a.h.stop(true);
+
+      /* a stale place must not link a tab that is waiting again: a steal
+         from that link would go unheard, and two tabs would link */
+      const d = w.tab('ZZZZZZZZZZ');
+      await w.settle();
+      const e = w.tab('ZZZZZZZZZZ');
+      await w.settle();
+      e.h.takeOver();                                  // e's first place goes stale
+      await w.settle();
+      d.h.takeOver();                                  // e is robbed and queues again
+      await w.settle();
+      assert.strictEqual(e.h.state, 'waiting');
+      await d.h.stop();
+      await w.settle();
+      assert.strictEqual(e.h.state, 'linked');
+      const f = w.tab('ZZZZZZZZZZ');
+      await w.settle();
+      f.h.takeOver();
+      await w.settle();
+      assert.strictEqual(f.h.state, 'linked');
+      assert.strictEqual(e.h.state, 'waiting', 'the robbed tab heard the steal');
+      assert.strictEqual(e.h.snes, null);
+      await e.h.stop(true); await f.h.stop(true);
+    } finally { global.AbortController = AC; }
+  }));
+
+test('link: tabs of different rooms each link; the lock is named for the room', () =>
+  withTabs(async (w) => {
+    const a = w.tab('AAAAAAAAAA'), b = w.tab('BBBBBBBBBB');
+    await w.settle();
+    assert.strictEqual(a.h.state, 'linked');
+    assert.strictEqual(b.h.state, 'linked');
+    assert.deepStrictEqual(w.locks.log.map(r => r.name),
+      ['hyrulelink.link.AAAAAAAAAA', 'hyrulelink.link.BBBBBBBBBB']);
+    await a.h.stop(true); await b.h.stop(true);
+  }));
+
+test('link: no locks API links at once, as before', () =>
+  withTabs(async (w) => {
+    const a = w.tab(null, { locks: null }), b = w.tab(null, { locks: null });
+    assert.strictEqual(a.h.state, 'linked');
+    assert.strictEqual(b.h.state, 'linked');
+    assert.deepStrictEqual(a.states, [], 'no onLock for the state link() returns with');
+    assert.strictEqual(w.snes.length, 2);
+    b.h.takeOver();
+    assert.strictEqual(w.locks.log.length, 0);
+    await a.h.stop(true); await b.h.stop(true);
+    /* and a browser that refuses the request links too */
+    const c = w.tab(null, { locks: { request: () => Promise.reject(new Error('SecurityError')) } });
+    await w.settle();
+    assert.strictEqual(c.h.state, 'linked');
+    await c.h.stop(true);
+  }));
+
+test('game: nothing from the room reaches the game once a page stops linking', () =>
+  withTabs(async (w) => {
+    /* a robbed tab takes its HUD line down before it closes its socket:
+       a grant arriving then must not be written behind the new tab's back */
+    const g = HLGame.start({ room: { code: 'X', player_id: 1, player_token: 't' }, wsUrl: 'ws://room.test/ws' });
+    g.snes.attach();
+    await w.settle();
+    const sock = w.hellos()[0];
+    sock.onmessage({ data: JSON.stringify({ type: 'grant', item: 'lamp', level: 1 }) });
+    assert.strictEqual(g.agent.handled.length, 1);
+    const done = g.stop();
+    sock.onmessage({ data: JSON.stringify({ type: 'grant', item: 'hookshot', level: 1 }) });
+    assert.strictEqual(g.agent.handled.length, 1);
+    await done;
+    assert.deepStrictEqual(sock.sent.map(m => m.type), ['hello', 'bye']);
+  }));
+
 (async () => {
   for (const [name, fn] of tests) {
     try { await fn(); passed++; console.log('ok   ' + name); }

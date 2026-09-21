@@ -861,13 +861,16 @@
 
   /* ------------------------------------------------------------- the game */
 
+  /* One tab per room per browser links the game (a Web Lock in game.js);
+     another tab of this room waits, and links when that one lets go. */
   function startGame() {
     if (game || mode !== 'player' || !seat || !window.HLGame) return;
     agentOpen = false;
-    game = window.HLGame.start({
+    game = window.HLGame.link({
       room: { code: code, player_id: seat.player_id, player_token: seat.player_token },
       wsUrl: wsUrl(),
       hud: hudOn(),
+      onLock: onLock,
       onStatus: function () { drawGame(); },
       onLog: function (text) { if (window.console && console.debug) console.debug('[game] ' + text); },
       onNotify: onNotify,
@@ -884,6 +887,12 @@
     if (lastLine && !lastFate) lastFate = 'off';     // stopping takes the line down
     drawGame();
     return g.stop();
+  }
+
+  /* Another tab took the link: the line on screen came down with it. */
+  function onLock(state) {
+    if (state !== 'linked' && lastLine && !lastFate) lastFate = 'tab';
+    drawGame();
   }
 
   function onNotify(text) {
@@ -920,7 +929,16 @@
       drawLine();
       return;
     }
-    var s = game.snes;
+    if (game.state === 'waiting') {
+      lamp.className = 'lamp wait';
+      line('Linked in another tab of this browser.', 'This tab takes over when that one closes.');
+      box.appendChild(el('button', { class: 'btn small', type: 'button', text: 'Link this tab instead',
+        'data-focus': 'takeover', on: { click: function () { if (game) game.takeOver(); } } }));
+      box.appendChild(help);
+      drawLine();
+      return;
+    }
+    var s = game.snes || { state: 'searching' };      // a moment while it asks for the lock
     var bridge = /^(SNI|QUsb2Snes)$/.test(s.bridge) ? s.bridge : 'SNI or QUsb2Snes';
     if (s.state === 'attached') {
       lamp.className = 'lamp ok';
@@ -961,14 +979,15 @@
     off: 'Not drawn: no game is linked on this browser.',
     hud: 'Not drawn: in-game messages are off.',
     link: 'Not drawn: no game is linked yet.',
-    save: 'Not drawn: no save was loaded.'
+    save: 'Not drawn: no save was loaded.',
+    tab: 'Not drawn: the game link moved to another tab.'
   };
   function drawLine() {
     $('linkLine').hidden = !lastLine || mode !== 'player';
     if (!lastLine) return;
-    /* switching the link or the lines off takes a line down; anything else
-       is as it was when the line came in */
-    var fate = !game ? 'off' : (!hudOn() ? 'hud' : lastFate);
+    /* switching the link or the lines off, or another tab taking the link,
+       takes a line down; anything else is as it was when the line came in */
+    var fate = !game ? 'off' : game.state === 'waiting' ? 'tab' : (!hudOn() ? 'hud' : lastFate);
     var drawn = !fate;
     var text = window.Hud ? window.Hud.clean(lastLine, null, true) : lastLine.toUpperCase();
     $('lineLamp').className = 'lamp' + (drawn ? ' ok' : '');

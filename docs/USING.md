@@ -92,11 +92,17 @@ everything you hold.
 
 ### One game link per player
 
-The page registers as your game link the first time it finds a game. A second
-tab, a second device, or the desktop app's *Connect & Play* for the same
-player takes over from it: the newest one wins, and the older one stops
-getting items. Open the room on a second tab or device only with
-*Settings, Link a game on this browser* switched off there.
+The page registers as your game link the first time it finds a game. One tab
+per room links on each browser. A second tab of the same room says *Linked in
+another tab of this browser* and takes over by itself when the first one
+closes or stops linking. *Link this tab instead* moves the link to it now, and
+the other tab waits. (This needs an https address or localhost; on a plain
+http address every tab links.)
+
+A second device or browser, or the desktop app's *Connect & Play*, for the
+same player takes over from the page: the newest one wins, and the older one
+stops getting items. Open the room on a second device only with *Settings,
+Link a game on this browser* switched off there.
 
 ### What the page reads and writes
 

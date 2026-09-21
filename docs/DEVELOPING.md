@@ -225,7 +225,17 @@ test and `compileall`.
   closing showed a linked player as offline (see
   [PROTOCOL.md](PROTOCOL.md#one-agent-per-player)). The page opens its agent
   socket only after it finds a game, and only with *Link a game on this
-  browser* on.
+  browser* on. Two tabs of one room in one browser are the same player (the
+  seat is in localStorage), and both used to link: when the newer tab closed,
+  the older one still said *Save loaded* while no grant reached it, and the
+  two polled one game, each blind to the other's writes, so one tab's grant
+  could look like a find to the other. `HLGame.link` now holds the Web Lock
+  `hyrulelink.link.<CODE>` for the whole linked lifetime, and a second tab
+  waits with no bridge and no socket. A tab robbed by *Link this tab
+  instead* (`steal`) stops and queues again; it must never steal back, or two
+  tabs pass the link back and forth. Only a secure context has
+  `navigator.locks`: on plain http from another PC every tab links, as
+  before. The units drive it with a fake `navigator.locks`.
 - **29 items, not 31.** An early count was wrong. A hello gets
   `len(shared.items.ITEMS)` commands; use that, or `HLItems.ITEMS.length`.
 
