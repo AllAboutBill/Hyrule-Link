@@ -137,7 +137,14 @@ Proven 2026-09-21, on this PC:
   closing the linked tab let the other take over in about 130 ms, with finds
   still reaching the board.
 
-**Live deploy: pending.**
+- **Live, 2026-09-21.** Deployed to the droplet and answering at both
+  https://www.billogna.lol/hyrulelink/ and https://hyrulelink.billogna.lol.
+  `tools/coop_check.js --server https://www.billogna.lol/hyrulelink` ran the
+  whole seven-step round against the live server through the path prefix and
+  `wss`, with two fake games on a PC at home: PASS in 12.6 s. A host opened
+  QuakeCast cams for two players on the live QuakeCast and closed them again
+  (its room count went 0, 1, 0), and no seat link appeared in any reply.
+  EtherNet and QuakeCast answered as before.
 
 Proven elsewhere and relied on: EtherNet's `snes.js` and `hud.js`, which
 these are copies of, wrote HUD lines into a real snes9x-nwa through the real
