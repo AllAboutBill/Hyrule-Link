@@ -133,9 +133,9 @@
   <div class="dlg-body">
     <h3>This browser</h3>
     <div class="set"><div class="k">Link a game on this browser<small>Off: this page does not look for a bridge and never registers as your game.</small></div>
-      <label class="switch"><input type="checkbox" role="switch" id="setLink"><span id="setLinkWord">On</span></label></div>
+      <label class="switch"><input type="checkbox" role="switch" id="setLink" aria-label="Link a game on this browser"><span id="setLinkWord">On</span></label></div>
     <div class="set"><div class="k">In-game messages<small>Off: no HUD lines. Items are still applied.</small></div>
-      <label class="switch"><input type="checkbox" role="switch" id="setHud"><span id="setHudWord">On</span></label></div>
+      <label class="switch"><input type="checkbox" role="switch" id="setHud" aria-label="In-game messages"><span id="setHudWord">On</span></label></div>
     <div class="set"><div class="k">Leave the room<small>Forgets your seat on this browser. What you hold stays in the room.</small></div>
       <button class="btn small danger" id="btnLeave" type="button">Leave</button></div>
     <div id="setHost" hidden>
@@ -162,7 +162,7 @@
       <li><div><b>Come back here.</b> This page finds the game on its own within a few seconds. If the browser asks whether this site may reach devices or apps on your local network, allow it: the game is on your PC, and that is the only way a web page can reach it.</div></li>
     </ol>
     <h3>Good to know</h3>
-    <p>This page reads your inventory bytes and the game module every half second, and writes items, the run flag for the boots, the bow and arrow bytes, and the HUD strip. Nothing else is read or written, and nothing leaves your PC but the item names it finds.</p>
+    <p>This page reads your inventory bytes and the game module every half second, and the HUD strip cells it draws over. It writes items, the run flag for the boots, the bow and arrow bytes, and the HUD strip. Nothing else is read or written, and nothing leaves your PC but the item names it finds.</p>
     <p>One game link per player: linking on a second browser, or with the desktop app, takes over from this one. Works in Chrome, Edge and Firefox. Safari does not let a web page talk to a program on the same computer.</p>
   </div>
 </dialog>

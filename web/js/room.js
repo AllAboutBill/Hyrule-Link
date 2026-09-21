@@ -109,6 +109,7 @@
   var game = null;          // HLGame handle while this browser links a game
   var agentOpen = false;
   var lastLine = null;
+  var lastFate = '';        // HLGame.lineFate when lastLine came in
   var RULE_DEFAULTS = {
     claiming: true, require_found_to_claim: true, open_season_scope: 'owned',
     steal_cooldown_s: 5, cooldown_scope: 'item', steal_back_lock_s: 0, steal_budget_per_min: 0,
@@ -183,6 +184,32 @@
   /* A button that needs a second click within a few seconds. */
   function armed(until) { return Date.now() < until; }
 
+  /* Every state push redraws the game row, the board and the player lists,
+     and a redraw swaps their buttons for new ones: the keyboard's place
+     would fall back to the page. Before a redraw, note which button in `box`
+     has focus (data-focus, data-claim or data-chip names it) and hand focus
+     to the button that replaced it. */
+  function focusKey(n) {
+    if (!n || n.nodeType !== 1) return null;
+    if (n.getAttribute('data-focus')) return n.getAttribute('data-focus');
+    if (n.getAttribute('data-claim')) return 'claim:' + n.getAttribute('data-claim');
+    if (n.getAttribute('data-chip')) return 'chip:' + n.getAttribute('data-chip');
+    return null;
+  }
+  function keepFocus(box, redraw) {
+    var was = document.activeElement;
+    var key = was && was !== document.body && box.contains(was) ? focusKey(was) : null;
+    redraw();
+    if (!key || box.contains(was)) return;
+    var all = box.querySelectorAll('[data-focus],[data-claim],[data-chip]');
+    for (var i = 0; i < all.length; i++) {
+      if (focusKey(all[i]) === key) {
+        if (!all[i].disabled) all[i].focus({ preventScroll: true });
+        return;
+      }
+    }
+  }
+
   // -------------------------------------------------------- the activity log
 
   function addLog(text, kind, ms) {
@@ -205,6 +232,8 @@
   function showMsg(title, sub, retry) {
     $('layout').hidden = true;
     $('joinCover').hidden = true;
+    $('btnInvite').hidden = true;
+    $('btnSettings').hidden = true;
     $('msgCover').hidden = false;
     $('msgTitle').textContent = title;
     $('msgSub').textContent = sub;
@@ -234,6 +263,8 @@
   function showJoin(note) {
     $('layout').hidden = true;
     $('msgCover').hidden = true;
+    $('btnInvite').hidden = true;
+    $('btnSettings').hidden = true;
     $('joinCover').hidden = false;
     $('joinLabel').textContent = (info && info.name) || ('Room ' + code);
     var n = info && info.players ? info.players.length : 0;
@@ -366,11 +397,13 @@
 
   function onReject(reason) {
     if (/room (not found|closed)/i.test(reason)) {
+      /* deleted, or pruned after two idle weeks, or a watch link to nothing:
+         say so, rather than drop the player on the front page unexplained */
       dead = true;
-      if (mode === 'player') seatSet(null);
       stopGame();
       dropSocket();
-      location.href = './';
+      st = null;
+      showGone();              // forgets this browser's seat in it
       return;
     }
     if (/bad room\/player token/i.test(reason)) {
@@ -479,21 +512,24 @@
     return !!e.locked || (e._tenure != null && left(e._tenure) <= 0);
   }
 
-  function hostChips(key, e) {
+  function hostChips(cat, e) {
     if (!isAdmin() || !st.players.length) return '';
+    var key = cat.key;
     var disc = (e && e.discovered) || [];
     var owner = e ? e.owner : null;
     return '<div class="chips">' + st.players.map(function (p) {
       var on = disc.indexOf(p.id) >= 0;
       return '<button class="chip' + (on ? ' on' : '') + (p.id === owner ? ' owner' : '') + '" type="button"'
         + ' data-chip="' + esc(key) + ':' + p.id + '" aria-pressed="' + on + '"'
+        + ' aria-label="' + esc(cat.name) + ' found by ' + esc(p.name) + (p.id === owner ? ', who holds it' : '') + '"'
         + ' title="' + esc(p.name) + (on ? ' found it' : ' has not found it') + (p.id === owner ? ' and holds it' : '')
         + '. Click: found or not. Shift-click: holder.">' + esc(shortName(p.name)) + '</button>';
     }).join('') + '</div>';
   }
 
-  function claimButton(key) {
-    return '<button class="btn small" type="button" data-claim="' + esc(key) + '">Claim</button>';
+  function claimButton(cat) {
+    return '<button class="btn small" type="button" data-claim="' + esc(cat.key) + '" aria-label="Claim '
+      + esc(cat.name) + '">Claim</button>';
   }
 
   /* -> [className, innerHTML]; the logic is app.js cardHtml's */
@@ -503,7 +539,7 @@
     var claiming = !!st && st.claiming !== false;
     var canPlay = mode === 'player' && you != null && claiming;
     var allows = Policy.canClaim(e || null, rules, you);
-    var chips = hostChips(cat.key, e);
+    var chips = hostChips(cat, e);
     var img = (e && e.image) || cat.image;
     var icon = img ? '<img class="item-icon" src="items/' + esc(img) + '" alt="" loading="lazy">' : '';
     var head, sub, extra = '', action = '', cls;
@@ -511,7 +547,7 @@
       cls = 'undiscovered';
       head = esc(cat.name);
       sub = 'Not found yet';
-      if (canPlay && allows) action = claimButton(cat.key);
+      if (canPlay && allows) action = claimButton(cat);
     } else {
       var mine = you != null && e.owner === you;
       var locked = isLocked(e);
@@ -523,7 +559,7 @@
       else if (locked) action = '<div class="item-sub held">Secured</div>';
       else if (!allows) action = '<div class="item-sub locked">Find one to claim</div>';
       else if (cd > 0.05) action = '<button class="btn small" type="button" disabled>Cooldown ' + tv(Math.ceil(cd)) + 's</button>';
-      else action = claimButton(cat.key);
+      else action = claimButton(cat);
       if (e.owner != null && e._hold != null) {
         var every = rules.hold_limit_s;
         if (every && !locked) while (e._hold <= Date.now()) e._hold += every * 1000;   // a hold that restarted without a state
@@ -561,7 +597,7 @@
       }
       node._shape = shape;
       node.className = c[0];
-      node.innerHTML = c[1];
+      keepFocus(node, function () { node.innerHTML = c[1]; });
     }
   }
 
@@ -629,12 +665,14 @@
     drawHostPlayers();
   }
 
-  function drawHostPlayers() {
+  function drawHostPlayers() { keepFocus($('hostPlayers'), hostPlayerRows); }
+  function hostPlayerRows() {
     var ul = $('hostPlayers');
     ul.textContent = '';
     st.players.forEach(function (p) {
       var hot = removeArm.id === p.id && armed(removeArm.until);
       var b = el('button', { class: 'btn small quiet danger' + (hot ? ' armed' : ''), type: 'button',
+        'data-focus': 'remove:' + p.id,
         text: hot ? 'Click again' : 'Remove', title: 'Remove ' + p.name + ' from the room',
         on: { click: function () {
           if (removeArm.id === p.id && armed(removeArm.until)) {
@@ -702,6 +740,7 @@
     if (send({ type: 'admin_reset_room' })) {
       $('hostResetWord').value = '';
       $('hostReset').disabled = true;
+      $('hostResetWord').focus();       // a disabled button would drop the keyboard to the page
     }
   });
 
@@ -842,6 +881,7 @@
     var g = game;
     game = null;
     agentOpen = false;
+    if (lastLine && !lastFate) lastFate = 'off';     // stopping takes the line down
     drawGame();
     return g.stop();
   }
@@ -850,17 +890,21 @@
     toast(text, 'link');
     addLog(text, 'link');
     lastLine = text;
+    /* judged now: a line said on the file select is thrown away when the
+       save loads, so the row must not say it is on the HUD later */
+    lastFate = window.HLGame.lineFate(game && game.snes, hudOn());
     drawLine();
   }
 
-  function drawGame() {
+  function drawGame() { keepFocus($('gameDo'), gameRow); }
+  function gameRow() {
     var player = mode === 'player';
     $('links').hidden = !player;
     if (!player) return;
     var lamp = $('gameLamp'), say = $('gameSay'), box = $('gameDo');
     say.textContent = '';
     box.textContent = '';
-    var help = el('button', { class: 'btn small quiet', type: 'button', text: 'How to link',
+    var help = el('button', { class: 'btn small quiet', type: 'button', text: 'How to link', 'data-focus': 'help',
       on: { click: function () { $('dlgGame').showModal(); } } });
     function line(text, small) {
       say.appendChild(document.createTextNode(text));
@@ -870,7 +914,8 @@
       lamp.className = 'lamp';
       line('Game linking is off on this browser.',
         'Another browser or the desktop app can be your game link. Switch it on in Settings to link here.');
-      box.appendChild(el('button', { class: 'btn small', type: 'button', text: 'Settings', on: { click: openSettings } }));
+      box.appendChild(el('button', { class: 'btn small', type: 'button', text: 'Settings', 'data-focus': 'settings',
+        on: { click: openSettings } }));
       box.appendChild(help);
       drawLine();
       return;
@@ -901,7 +946,7 @@
       line('No SNI or QUsb2Snes found on this PC.',
         'A browser cannot reach an emulator directly, NWA included; SNI is the small free program in between, and it needs no setup.');
       box.appendChild(el('a', { class: 'btn small', href: 'https://github.com/alttpo/sni/releases/latest',
-        target: '_blank', rel: 'noopener noreferrer', text: 'Get SNI' }));
+        target: '_blank', rel: 'noopener noreferrer', text: 'Get SNI', 'data-focus': 'sni' }));
       box.appendChild(help);
     } else {
       lamp.className = 'lamp';
@@ -912,17 +957,25 @@
   }
 
   /* the last line sent to this player's game, as the HUD draws it */
+  var NOT_DRAWN = {
+    off: 'Not drawn: no game is linked on this browser.',
+    hud: 'Not drawn: in-game messages are off.',
+    link: 'Not drawn: no game is linked yet.',
+    save: 'Not drawn: no save was loaded.'
+  };
   function drawLine() {
     $('linkLine').hidden = !lastLine || mode !== 'player';
     if (!lastLine) return;
-    var drawn = !!game && hudOn() && game.snes.state === 'attached';
+    /* switching the link or the lines off takes a line down; anything else
+       is as it was when the line came in */
+    var fate = !game ? 'off' : (!hudOn() ? 'hud' : lastFate);
+    var drawn = !fate;
     var text = window.Hud ? window.Hud.clean(lastLine, null, true) : lastLine.toUpperCase();
     $('lineLamp').className = 'lamp' + (drawn ? ' ok' : '');
     setStrip($('lineStrip'), text, !drawn);
     $('lineStrip').title = text;
     $('lineNote').textContent = drawn ? (text.length > 20 ? 'On your HUD. Longer than its 20 cells, so it scrolls across.' : 'On your HUD.')
-      : (!game ? 'Not drawn: no game is linked on this browser.'
-        : (!hudOn() ? 'Not drawn: in-game messages are off.' : 'Not drawn: no game is linked yet.'));
+      : (NOT_DRAWN[fate] || NOT_DRAWN.link);
   }
 
   // ------------------------------------------------------------- settings
@@ -956,6 +1009,7 @@
   $('setHud').addEventListener('change', function () {
     setFlag('hyrulelink.hud', this.checked);
     drawSwitches();
+    if (!this.checked && lastLine && !lastFate) lastFate = 'hud';   // the line on screen comes down
     if (game) game.setHud(this.checked);
     drawGame();
   });
