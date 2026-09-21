@@ -28,6 +28,7 @@ from shared.items import ITEMS, BY_KEY, tier_label, item_image
 from shared import protocol as P
 from shared.rules import DEFAULT_RULES, PRESET_OVERRIDES
 from server import db
+from server import connect
 
 logger = logging.getLogger("HyruleLink.ledger")
 
@@ -358,6 +359,10 @@ class RoomHub:
         self.uis: Dict[str, Dict[object, int]] = {}      # code -> {ws: user_id|None}
         self.admin_uis: Dict[str, set] = {}              # code -> {ws} granted global-admin
         self.apply_failures: Dict[str, set] = {}         # code -> {(user_id, item)}
+        # QuakeCast cams (server/connect.py), memory only: code -> {room_id,
+        # seats: {a: {player, token, url}, ...}, error, checked}. The tokens
+        # and seat links never leave here but to their own player's ui sockets.
+        self.cams: Dict[str, dict] = {}
 
     # -- room loading --------------------------------------------------------
     def get_room(self, code: str) -> Optional[RoomState]:
@@ -538,6 +543,25 @@ class RoomHub:
             await self.broadcast_event(code, eff.event)
         await self.broadcast_state(code)
 
+    # -- QuakeCast cams (server/connect.py does the talking) -------------------
+    def cams_doc(self, code: str):
+        """What everyone may know: who has a seat. Never a token or a link."""
+        c = self.cams.get(code)
+        if not c:
+            return None
+        return {"seats": [c["seats"][s]["player"] for s in sorted(c["seats"])],
+                "error": c.get("error", "")}
+
+    def cams_url(self, code: str, user_id):
+        """This player's own seat link, or None."""
+        c = self.cams.get(code)
+        if not c or c.get("error") or user_id is None:
+            return None
+        for s in sorted(c["seats"]):
+            if c["seats"][s]["player"] == user_id:
+                return c["seats"][s]["url"]
+        return None
+
     # -- state serialization for UIs ----------------------------------------
     def serialize(self, code: str) -> dict:
         room = self.rooms[code]
@@ -578,7 +602,7 @@ class RoomHub:
             if it.borrowed:
                 entry["borrow_remaining"] = max(0.0, it.borrow_until - now)
             ledger[key] = entry
-        return {
+        doc = {
             "type": P.STATE,
             "room": room.pub_id,      # public handle only — never leak the join code
             "name": room.name,
@@ -601,6 +625,9 @@ class RoomHub:
             ],
             "ledger": ledger,
         }
+        if connect.enabled():          # absent = this server has no QuakeCast
+            doc["cams"] = self.cams_doc(code)
+        return doc
 
     async def broadcast_state(self, code: str):
         if code not in self.rooms:
@@ -1061,6 +1088,7 @@ class RoomHub:
         self.uis.pop(code, None)
         self.admin_uis.pop(code, None)
         self.apply_failures.pop(code, None)
+        self.cams.pop(code, None)         # the caller ends its QuakeCast room
 
 
 hub = RoomHub()

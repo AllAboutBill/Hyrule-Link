@@ -25,6 +25,7 @@ variable wins). `.env.example` has all of it:
 | `HYRULELINK_OPERATOR_KEY_FILE` | the operator key, default `server/operator.key`; relative paths from the repo root |
 | `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_REDIRECT_URI`, `DISCORD_GUILD_ID`, `DISCORD_MOD_ROLE_IDS`, `DISCORD_ADMIN_USER_IDS`, `SESSION_SECRET` | Discord login. Only the desktop app has a button for it. Unset, it is off. |
 | `HYRULELINK_BOT_HUD` | the desktop agent's BillognaBot hand-off URL; `0` turns it off |
+| `HYRULELINK_CONNECT_URL` | QuakeCast's API for the Cams row, e.g. `http://127.0.0.1:5043` on the droplet. Empty (the default): the cams routes answer 404 and the row is hidden. |
 
 The operator page, locally:
 
@@ -66,6 +67,38 @@ means the node harness below, which gives each its own fake.
 Linking a page to a REAL game from a dev session writes to it: the agent
 socket's hello pushes a grant or revoke for all 29 items as soon as a save is
 loaded. Use a throwaway save, and check nobody is mid-run on that emulator.
+
+## QuakeCast here
+
+The Cams row (`server/connect.py`, `web/js/cams.js`) needs a QuakeCast to
+talk to. `tests/test_connect.py` brings its own fake, so the suite never
+does. To see it for real, run RaceConnect from its own directory with a
+config of your own (never edit `F:\RaceConnect`, and never use the live
+ports 5041, 5043, 8889, 8899, 9997 or 9998):
+
+```bash
+mkdir -p /c/temp && echo '{"port": 5147, "data_dir": "C:/temp/qc-data", "media_api": "http://127.0.0.1:59998"}' > /c/temp/qc.json
+(cd /f/RaceConnect/server && /f/StreamStudio/.venv/Scripts/python.exe -m raceconnect --config C:/temp/qc.json)   # its own terminal
+HYRULELINK_CONNECT_URL=http://127.0.0.1:5147 .venv/Scripts/python.exe run_server.py --port 5019
+```
+
+Without a relay (MediaMTX) no video flows, but rooms and seats are made and
+closed, which is all this side does; `media_api` points at nothing so its
+watchdog finds no relay. Its budget is 6 rooms an hour per address, and every
+room opened from this PC counts against 127.0.0.1: add
+`"rooms_per_ip_per_hour": 100` to the config while trying things.
+
+- **The seat links are credentials.** They live in `hub.cams` (memory only),
+  go to their own player's ui sockets as `{type: "cams", url}`, and nowhere
+  else: not the state document, not a reply, not a log line. A test checks.
+- **Only seat `a` can close a QuakeCast room**, and the server made it, so
+  seat `a`'s token is kept to close it with `force` (a player sitting in their
+  seat would otherwise make QuakeCast refuse).
+- **QuakeCast budgets rooms per address** and believes `X-Forwarded-For` only
+  from loopback. The caller's address (`rate_limit.client_key`) is passed on
+  only when `HYRULELINK_CONNECT_URL` is loopback, which on the droplet it is.
+- **A restart forgets the cams.** The QuakeCast room ends by itself; the host
+  opens new ones.
 
 ## Tests
 

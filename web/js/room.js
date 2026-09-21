@@ -392,6 +392,8 @@
       addLog(m.text, /^\u26a0/.test(String(m.text || '')) ? 'warn' : null, m.ts ? m.ts * 1000 : null);
     } else if (m.type === 'reject') {
       onReject(String(m.reason || ''));
+    } else if (m.type === 'cams') {
+      camsSeat(m.url);
     }
   }
 
@@ -466,6 +468,7 @@
     drawModeBanner();
     drawGrid();
     drawPlayers();
+    drawCams();
     drawHost();
     drawGame();
   }
@@ -858,6 +861,22 @@
     }
   });
   $('dlgRules').addEventListener('close', rulesClosed);
+
+  /* ---------------------------------------------- QuakeCast cams (cams.js)
+
+     The Cams row is cams.js's. This page hands it each state document and
+     this player's own seat link (the ui socket's {type:"cams", url}); the
+     link is never in the state document. Hidden when the server has no
+     QuakeCast, and for watchers. */
+
+  var cams = window.HLCams ? window.HLCams.mount({
+    code: code,
+    seat: function () { return seat; },
+    post: post,
+    toast: toast
+  }) : null;
+  function drawCams() { if (cams) cams.draw(st, isAdmin(), mode === 'player' && !!seat); }
+  function camsSeat(url) { if (cams) cams.seat(url || null); }
 
   /* ------------------------------------------------------------- the game */
 

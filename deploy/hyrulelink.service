@@ -9,6 +9,9 @@ After=network.target
 User=root
 WorkingDirectory=/opt/hyrulelink
 ExecStart=/opt/hyrulelink/.venv/bin/python run_server.py --host 127.0.0.1 --port 5019
+# QuakeCast (raceconnect.service) on its own loopback port: the room page's
+# Cams row. Remove this line to switch the cams off.
+Environment=HYRULELINK_CONNECT_URL=http://127.0.0.1:5043
 Restart=always
 RestartSec=3
 # the box has 2 GB and is already into swap; the server needs well under 100 MB

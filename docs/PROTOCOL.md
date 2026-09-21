@@ -225,6 +225,53 @@ The rules (`shared/rules.py` has the defaults, `server/ledger.py` the clamps):
 Hot Potato and Chaos move items only among players whose agent is
 registered. A physical find always takes the item, whatever the rules.
 
+## QuakeCast cams
+
+The host can open a QuakeCast room for two to four players: each gets a
+private seat link that shares their cam, game window and tracker and gives
+them the others' OBS sources. `server/connect.py` talks to QuakeCast's own
+HTTP API (RaceConnect `docs/CONTRACT.md`). There is no clock. The feature is
+off unless `HYRULELINK_CONNECT_URL` is set: then both routes answer 404
+`not found`, the state document has no `cams` key, and no `cams` message is
+sent.
+
+| | | |
+|---|---|---|
+| `POST api/rooms/{code}/cams` | `{player_id, player_token, seats: [player ids]}` | `{ok, cams: {seats, error}}`. Two to four different players of the room, in seat order (`a`, `b`, `c`, `d`). Opening again replaces the cams and ends the old QuakeCast room. |
+| `POST api/rooms/{code}/cams/close` | `{player_id, player_token}` | `{ok}`, or `{ok, warning}` when QuakeCast could not be told: the cams are closed here either way. |
+
+Both are the host's, by their own seat, or a Discord admin's (the session
+cookie or `X-HL-Session`): 403 `host only` or `bad room/player token`
+otherwise, 404 `no such room`. A bad pick is 422 `Pick two to four different
+players in the room.` QuakeCast's no is 502 with its reason in words:
+`QuakeCast is not answering.`, `QuakeCast is full right now. ...`,
+`QuakeCast says slow down. ...`, `QuakeCast answered 500.`. Ten calls a
+minute per address.
+
+The seat links are credentials. They are kept in server memory only, never
+written to the database or a log, never in the state document or any
+reply, and they reach nobody but their own player:
+
+| ui socket, server to page | |
+|---|---|
+| `cams` | `{url}` this player's own seat link, or `null`. Sent after the first `state` of every player's hello, and to each seated player (and anyone who just lost a seat) when cams open, close or end. Never to a watcher. |
+
+The state document gains `cams: null | {seats: [player ids], error}`: who has
+a seat, never a link. `error` is `""`, or `"ended"` once QuakeCast says the
+room is gone (it ends a room two hours after the last player leaves their
+seat, or twelve after it opened). The server asks at most once a minute per
+room, when a player's page says hello.
+
+To QuakeCast, from the server: `POST api/rooms {name: <room name>, seats: n,
+a, b, c?, d?: <player names>}`, with the caller's address as
+`X-Forwarded-For` only when `HYRULELINK_CONNECT_URL` is loopback (QuakeCast
+budgets rooms per address); `POST api/seat/<seat a's token> {close: true,
+force: true}` to close (seat `a` made the room, so only it may); `GET
+api/seat/<seat a's token>` to see whether it still exists. Deleting a
+HyruleLink room (operator, Discord admin, the 14-day prune) closes its
+QuakeCast room too. A server restart forgets the cams; the QuakeCast room then
+ends by itself.
+
 ## The game memory contract
 
 The page reaches the game through SNI or QUsb2Snes (usb2snes) at

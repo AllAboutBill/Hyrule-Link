@@ -57,6 +57,15 @@
       </div>
     </div>
 
+    <!-- QuakeCast cams (js/cams.js): only when the server has QuakeCast -->
+    <div class="panel links" id="cams" hidden>
+      <div class="link" id="linkCams">
+        <div class="what"><span class="lamp" id="camLamp"></span>Cams</div>
+        <div class="say" id="camSay"></div>
+        <div class="do" id="camDo"></div>
+      </div>
+    </div>
+
     <div class="mode-banner" id="modeBanner" hidden>
       <b class="mode" id="modeName"></b><span class="summary" id="modeSummary"></span>
       <span class="next" id="modeNext" hidden>Next shuffle <b id="modeNextClock"></b></span>
@@ -206,6 +215,7 @@
 <div class="toasts" id="toasts" aria-live="assertive"></div>
 
 <script src="js/items.js"></script>
+<script src="js/cams.js"></script>
 <script src="js/effects.js"></script>
 <script src="js/agent.js"></script>
 <script src="js/hud.js"></script>

@@ -167,6 +167,31 @@ The rest of the Host panel:
   players and settings stay, and every linked game drops its shared items.
   It is for a fresh start on new seeds.
 
+## Cams through QuakeCast
+
+[QuakeCast](https://www.billogna.lol/connect/) puts players' cams, game
+windows and item trackers into each other's OBS, from a browser tab, with
+nothing to install. The host can open it for two to four players of the room
+from the *Cams* row under the Game row: tick the players, *Open cams*.
+
+- Each of them gets *Open my cam seat* in that row, on their own page only.
+  The seat link is theirs alone: it shares their cam, game window and tracker
+  and gives them OBS sources of the others. Do not show it on stream; anyone
+  with it can take the seat.
+- Everyone else in the room sees who has a seat, never a link.
+- *Close cams* (a second click confirms) ends the QuakeCast room for everyone
+  in it. Opening again for other players does the same to the old one.
+  Removing a player from the room does not end their seat: close the cams and
+  open them again without them.
+- QuakeCast ends a room by itself two hours after the last player leaves their
+  seat. The row then says *The cam room has ended*, and the host can open a
+  new one.
+- QuakeCast runs a handful of rooms at a time for everybody, and a few new
+  ones an hour per address. When it says no, the host sees why.
+
+The row is only there when the server is set up with QuakeCast. There is no
+race clock: HyruleLink is co-op.
+
 ## Watching
 
 *Watch* in "Live rooms" on the front page opens `room.html?watch=...`: the
