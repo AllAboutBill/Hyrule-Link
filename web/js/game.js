@@ -24,6 +24,7 @@
  *                          onNotify(text), onAgentSocket(open), onReject(reason) });
  *   g.setHud(false); g.stop();  // stop resolves once the HUD line is down
  *   g.stop(true);               // the page is going away: close now
+ *   HLGame.lineFate(g.snes, hud) // '' drawn, or 'off' | 'hud' | 'link' | 'save'
  */
 (function (root) {
   'use strict';
@@ -194,7 +195,23 @@
     };
   }
 
-  var HLGame = { start: start, RECONNECT_MS: RECONNECT_MS };
+  /* Does a line said to the game right now reach its screen? '' when it
+     does (or waits behind a door or a death), else why not: 'off' no game
+     link on this browser, 'hud' in-game messages switched off, 'link' no
+     game attached, 'save' no save loaded. snes.js draws only while a save
+     is loaded and drops every queued line when a file loads, so a line said
+     on the title or file select, or before the first poll, is never drawn.
+     The room page's "Last line" row says which. */
+  function lineFate(snes, hudOn) {
+    if (!snes) return 'off';
+    if (!hudOn) return 'hud';
+    if (snes.state !== 'attached') return 'link';
+    var out = (root.Snes && root.Snes.OUT_OF_GAME) || {};
+    if (snes._outOfGame || snes.module == null || out[snes.module]) return 'save';
+    return '';
+  }
+
+  var HLGame = { start: start, lineFate: lineFate, RECONNECT_MS: RECONNECT_MS };
   root.HLGame = HLGame;
   if (typeof module === 'object' && module.exports) module.exports = HLGame;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -23,11 +23,13 @@
  * Copied from EtherNet (web/js/snes.js). What changed: the bridge URLs and
  * the client name are options (opts.urls, opts.name); opts.onTick(module,
  * playable) runs every loop after the module bookkeeping and before the HUD
- * tick (the item agent polls there); OUT_OF_GAME and URLS are exported; and
- * there is no switch for writes.
+ * tick (the item agent polls there); OUT_OF_GAME and URLS are exported;
+ * there is no switch for writes; and a socket gets OPEN_MS (6 s, not 2.5)
+ * to open before its bridge counts as jammed (see OPEN_MS).
  *
- * What this page reads: the game's main module ($7E0010) and the inventory
- * block $7EF342-$7EF38E. What it writes: the item bytes in that block
+ * What this page reads: the game's main module ($7E0010), the inventory
+ * block $7EF342-$7EF38E, and the HUD strip cells a line is drawn over (to
+ * put them back). What it writes: the item bytes in that block
  * (grants and revokes from the room), the run flag for the boots ($7EF379),
  * the bow's equip byte ($7EF340) and arrows ($7EF377), the HUD strip
  * ($7EC700 row 4) and the HUD update flag ($7E0016). Nothing else. Unlike
@@ -57,6 +59,14 @@
      stays tracked and is put back properly once play resumes. */
   var OUT_OF_GAME = { 0x00: 1, 0x01: 1, 0x02: 1, 0x03: 1, 0x04: 1, 0x05: 1, 0x14: 1, 0x17: 1, 0x1B: 1 };
   var LOOP_MS = 500;
+  /* How long a socket may take to open before the bridge behind it counts
+     as there-but-jammed. Chrome holds each new WebSocket back 1 to 5 s once a
+     page has had many more failed ones than good ones (its per-process
+     throttle), and a page with no bridge running fails two a round: at 2.5 s
+     it called a missing bridge a jammed one ('stuck') within a minute, and
+     closed a bridge started after that before its socket could open.
+     Measured in Chrome 2026-09-21: refusals and opens alike took 1.0-4.9 s. */
+  var OPEN_MS = 6000;
 
   function makeTicker(ms, fn) {
     var stopped = false, worker = null, iv = null;
@@ -111,6 +121,7 @@
   Snes.PLAYABLE = PLAYABLE;
   Snes.OUT_OF_GAME = OUT_OF_GAME;
   Snes.URLS = URLS;
+  Snes.OPEN_MS = OPEN_MS;
 
   Snes.prototype.start = function () {
     var self = this;
@@ -158,7 +169,7 @@
     var opened = false, closed = false, late = false;
     var to = setTimeout(function () {
       if (!opened) { late = true; try { sock.close(); } catch (e) { /* already */ } }
-    }, 2500);
+    }, OPEN_MS);
     sock.onopen = function () {
       opened = true;
       clearTimeout(to);

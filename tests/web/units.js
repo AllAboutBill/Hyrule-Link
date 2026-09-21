@@ -12,6 +12,7 @@ const Snes = require(path.join(__dirname, '../../web/js/snes.js'));
 const Items = require(path.join(__dirname, '../../web/js/items.js'));
 const Effects = require(path.join(__dirname, '../../web/js/effects.js'));
 const Agent = require(path.join(__dirname, '../../web/js/agent.js'));
+const HLGame = require(path.join(__dirname, '../../web/js/game.js'));
 
 let passed = 0;
 const tests = [];
@@ -195,7 +196,11 @@ async function withBridges(modes, fn, opts) {
   global.setTimeout = (f, ms) => { due.set(++seq, [now + (ms || 0), f]); return seq; };
   global.clearTimeout = id => { due.delete(id); };
   global.WebSocket = function (url) {
-    const mode = modes[/:(\d+)/.exec(url)[1]] || 'refuse';
+    /* two more, for Chrome's throttle on a page with many failed sockets:
+       throttled (refused, but only after 4.5 s) and slowok (an ok bridge
+       whose socket takes 4 s to open) */
+    const asked = modes[/:(\d+)/.exec(url)[1]] || 'refuse';
+    const mode = asked === 'slowok' ? 'ok' : asked;
     const ws = this;
     let shut = false, put = null;
     ws.url = url;
@@ -235,7 +240,8 @@ async function withBridges(modes, fn, opts) {
       }
     };
     if (mode === 'refuse') global.setTimeout(end, 1);
-    else if (mode !== 'hang') global.setTimeout(() => { if (!shut) { ws.readyState = 1; ws.onopen({}); } }, 1);
+    else if (mode === 'throttled') global.setTimeout(end, 4500);
+    else if (mode !== 'hang') global.setTimeout(() => { if (!shut) { ws.readyState = 1; ws.onopen({}); } }, asked === 'slowok' ? 4000 : 1);
   };
   const states = [];
   const snes = new Snes(Object.assign({ onStatus: s => states.push(s.state) }, opts || {}));
@@ -286,6 +292,22 @@ test('snes: a jammed bridge restarted as a working one attaches', () => {
     assert.strictEqual(Snes.friendly(snes.device), 'Emulator (NWA)');
   });
 });
+
+test('snes: no bridge behind Chrome\'s socket throttle is still no-bridge, never stuck', () =>
+  withBridges({ 23074: 'throttled', 8080: 'throttled' }, async (snes, clock, made, states) => {
+    await clock.advance(120000);
+    assert.ok(states.indexOf('stuck') < 0, 'a missing bridge was called jammed: ' + states);
+    assert.strictEqual(snes.state, 'no-bridge');
+    assert.ok(Snes.OPEN_MS > 5000, 'Chrome holds a socket back up to 5 s: ' + Snes.OPEN_MS);
+  }));
+
+test('snes: a bridge whose socket is held back 4 s still attaches', () =>
+  withBridges({ 23074: 'slowok' }, async (snes, clock, made, states) => {
+    await clock.advance(6000);
+    assert.strictEqual(snes.state, 'attached');
+    assert.strictEqual(made.length, 1, 'the slow socket was not given up on');
+    assert.ok(states.indexOf('stuck') < 0);
+  }));
 
 /* HUD strip text straight out of a WRAM image (what the player would read). */
 function stripText(mem) {
@@ -880,6 +902,39 @@ test('agent: status on attach and loss; an unknown item is ignored; reject is lo
   assert.strictEqual(g.ops.length, 0);
   await h.agent.handle({ type: 'reject', reason: 'bad room/player token' });
   assert.ok(h.logs.some(l => /bad room\/player token/.test(l)));
+});
+
+test('game: a line is on the HUD only with a game linked, lines on and a save loaded', async () => {
+  const fate = HLGame.lineFate;
+  assert.strictEqual(fate(null, true), 'off');
+  assert.strictEqual(fate({ state: 'searching', module: null }, true), 'link');
+  assert.strictEqual(fate({ state: 'attached', module: 0x07, _outOfGame: false }, false), 'hud');
+  assert.strictEqual(fate({ state: 'attached', module: 0x07, _outOfGame: false }, true), '');
+  // a door spotlight or a death keeps the line queued until play resumes
+  assert.strictEqual(fate({ state: 'attached', module: 0x12, _outOfGame: false }, true), '');
+  // title and file select: the line is dropped when the save loads
+  assert.strictEqual(fate({ state: 'attached', module: 0x01, _outOfGame: true }, true), 'save');
+  assert.strictEqual(fate({ state: 'attached', module: 0x05, _outOfGame: true }, true), 'save');
+  assert.strictEqual(fate({ state: 'attached', module: null, _outOfGame: true }, true), 'save');
+  // and the real thing: a line said on the file select never reaches the strip
+  await withBridges({ 23074: 'ok' }, async (snes, clock, made, states, bridge) => {
+    const poll = async () => { const p = snes._loop(); await clock.advance(1000); await p; };
+    await clock.advance(1000);
+    assert.strictEqual(snes.state, 'attached');
+    assert.strictEqual(fate(snes, true), 'save');     // attached, not polled yet
+    bridge.wram[0x10] = 0x01;                         // file select
+    await poll();
+    assert.strictEqual(fate(snes, true), 'save');
+    snes.say('Lamp sent to Bo');
+    bridge.wram[0x10] = 0x07;                         // the save loads
+    await poll();
+    await poll();
+    assert.strictEqual(stripText(bridge.wram), ' '.repeat(20));
+    assert.strictEqual(fate(snes, true), '');
+    snes.say('Sword sent to Bo');
+    await poll();
+    assert.strictEqual(stripText(bridge.wram), '  SWORD SENT TO BO  ');
+  });
 });
 
 (async () => {
