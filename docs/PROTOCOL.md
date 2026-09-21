@@ -92,8 +92,8 @@ Every response: `Cache-Control: public, max-age=604800` for `.png .svg
 `/ws` at the root; a page builds it as `new URL('ws', location.href)` with
 `ws:` or `wss:`. The first message is `hello`. Anything else gets
 `reject "expected hello"`; a hello that fails gets a `reject` and the socket
-is closed (1000). There are no custom close codes. Deleting a room closes its
-sockets without a message.
+is closed (1000). There are no custom close codes. Deleting a room sends each
+of its sockets `reject "room closed"`, then closes it.
 
 | hello | | |
 |---|---|---|

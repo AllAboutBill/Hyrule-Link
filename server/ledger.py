@@ -1073,14 +1073,14 @@ class RoomHub:
 
     async def drop_room(self, code: str):
         """Tear a room down: close every live connection and forget it in memory
-        (the DB row is removed separately). Used by the global-admin delete."""
-        for ws in list(self.agents.get(code, {}).values()):
+        (the DB row is removed separately). Used by the global-admin delete.
+        Each socket is told why first, so a page shows "that room is gone" at
+        once and stops reconnecting, instead of retrying into a 404."""
+        socks = (list(self.agents.get(code, {}).values())
+                 + list(self.uis.get(code, {}).keys()))
+        for ws in socks:
             try:
-                await ws.close()
-            except Exception:
-                pass
-        for ws in list(self.uis.get(code, {}).keys()):
-            try:
+                await ws.send_json({"type": P.REJECT, "reason": "room closed"})
                 await ws.close()
             except Exception:
                 pass

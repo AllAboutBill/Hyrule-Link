@@ -302,6 +302,7 @@ class OperatorTests(ServerCase):
                 r = self.op("POST", f"/api/operator/rooms/{a['code'].lower()}/delete")
                 self.assertEqual(r.status_code, 200, r.text)
                 self.assertEqual(r.json(), {"ok": True, "deleted": a["code"]})
+                self.assertEqual(ws.receive_json(), {"type": "reject", "reason": "room closed"})
                 with self.assertRaises(WebSocketDisconnect):
                     ws.receive_json()
             self.assertIsNone(db.get_room(a["code"]))
