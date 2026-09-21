@@ -1,4 +1,4 @@
-/* HyruleLink - the player agent, in the browser.
+/* BombosSwap - the player agent, in the browser.
  *
  * A port of agent/agent.py (HyruleAgent) without its sockets and threads:
  * snes.js owns the game link and calls tick() with the module byte every

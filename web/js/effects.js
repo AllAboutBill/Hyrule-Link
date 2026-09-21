@@ -1,4 +1,4 @@
-/* HyruleLink - grants and revokes as WRAM writes.
+/* BombosSwap - grants and revokes as WRAM writes.
  *
  * A port of agent/effects.py and agent/sni/item_effects.py (ItemManager),
  * write for write and read for read: the same bytes go to the same

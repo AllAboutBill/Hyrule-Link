@@ -166,7 +166,7 @@ test('abort puts the game cells back at once; reset writes nothing', async () =>
    refuse (nothing listening), hang (takes the connection, never opens it; its
    close event fires twice, as node's does), jam (answers AppVersion, then
    nothing: QUsb2Snes on 2026-09-21), ok (a bridge with snes9x-nwa behind it).
-   HyruleLink: an ok bridge also has a WRAM behind it (GetAddress answers in
+   BombosSwap: an ok bridge also has a WRAM behind it (GetAddress answers in
    two binary frames, PutAddress lands, the NMI consumes the HUD flag), and
    `opts` goes to the Snes (urls, name, onTick). */
 async function withBridges(modes, fn, opts) {
@@ -329,12 +329,12 @@ test('snes: by default it looks on 23074 then 8080', () => withBridges({}, async
   assert.deepStrictEqual(Snes.URLS, ['ws://localhost:23074', 'ws://localhost:8080']);
 }));
 
-test('snes: opts.urls replaces the bridge list and the client is named HyruleLink', () =>
+test('snes: opts.urls replaces the bridge list and the client is named BombosSwap', () =>
   withBridges({ 23174: 'ok', 23074: 'ok' }, async (snes, clock, made, states, bridge) => {
     await clock.advance(1000);
     assert.strictEqual(snes.state, 'attached');
     assert.ok(made.length >= 1 && made.every(ws => ws.url === 'ws://localhost:23174'), made.map(ws => ws.url).join());
-    assert.deepStrictEqual(bridge.ops.filter(o => o[0] === 'Name'), [['Name', ['HyruleLink']]]);
+    assert.deepStrictEqual(bridge.ops.filter(o => o[0] === 'Name'), [['Name', ['BombosSwap']]]);
   }, { urls: ['ws://localhost:23174'] }));
 
 test('snes: onTick gets the module before the HUD ticks, and item writes need no switch', () => {

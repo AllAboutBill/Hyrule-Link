@@ -1,1 +1,1 @@
-"""HyruleLink shared modules (item catalog + WS protocol)."""
+"""BombosSwap shared modules (item catalog + WS protocol)."""

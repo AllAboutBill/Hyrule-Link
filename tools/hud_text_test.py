@@ -3,7 +3,7 @@ hud_text_test.py — write a test message onto the in-game HUD, live.
 
 Run with your emulator open and a save loaded:
 
-    python -m tools.hud_text_test "HELLO FROM HYRULELINK"
+    python -m tools.hud_text_test "HELLO FROM BOMBOSSWAP"
     python -m tools.hud_text_test --row 4 --col 1 --width 30 "LAMP STOLEN FROM BILL"
 
 The message shows for ~6 seconds, then the original HUD cells are restored.
@@ -25,7 +25,7 @@ from agent.sni.memory_constants import MEMORY_ADDRESSES, PLAYABLE_MODES
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("text", nargs="?", default="HELLO FROM HYRULELINK")
+    ap.add_argument("text", nargs="?", default="HELLO FROM BOMBOSSWAP")
     ap.add_argument("--row", type=int, default=4)
     ap.add_argument("--col", type=int, default=5)
     ap.add_argument("--width", type=int, default=20)

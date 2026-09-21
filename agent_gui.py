@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HyruleLink — Player app (all-in-one, no login).
+BombosSwap — Player app (all-in-one, no login).
 
 Type a name, Host or Join a room by code, and play — the game board lives right
 inside this window (always connected), and one button links your emulator. No
@@ -350,7 +350,7 @@ class App(tk.Tk):
         self.logo_font = next((f for f in ("Unbounded", "Orbitron") if f in fams),
                               "Segoe UI Semibold")
         self.mono_font = "DM Mono" if "DM Mono" in fams else "Consolas"
-        self.title("HyruleLink")
+        self.title("BombosSwap")
         self.configure(bg=BG)
         self._configure_ttk()
         # Open wide and as tall as the screen allows, so the multi-column board
@@ -488,7 +488,7 @@ class App(tk.Tk):
         self.header = tk.Canvas(self, height=HEAD_H, bg=BG, highlightthickness=0)
         self.header.pack(fill="x")
         self._attach_pixel_field(self.header, cell=24)
-        self.header.create_text(20, 23, anchor="w", text="HyruleLink",
+        self.header.create_text(20, 23, anchor="w", text="BombosSwap",
                                 fill=ACCENT, font=(self.logo_font, 17, "bold"), tags="fg")
         self.header.create_text(21, 44, anchor="w", text="SHARED INVENTORY CO-OP",
                                 fill=MUTED, font=(self.mono_font, 7), tags="fg")
@@ -642,7 +642,7 @@ class App(tk.Tk):
                     (f"https://api.github.com/repos/{GITHUB_REPO}/tags",
                      lambda d: d[0]["name"] if d else None)):
                 try:
-                    req = urllib.request.Request(url, headers={"User-Agent": "HyruleLink"})
+                    req = urllib.request.Request(url, headers={"User-Agent": "BombosSwap"})
                     with urllib.request.urlopen(req, timeout=10) as r:
                         latest = pick(json.loads(r.read().decode()))
                 except Exception:
@@ -1620,7 +1620,7 @@ class App(tk.Tk):
         if typed.strip().upper() == code.upper():
             self._ui_send({"type": "admin_reset_room"})
         else:
-            messagebox.showinfo("HyruleLink", "Reset cancelled — the code didn't match.")
+            messagebox.showinfo("BombosSwap", "Reset cancelled — the code didn't match.")
 
     def _is_host(self):
         return bool(self.state) and self.state.get("you") == self.state.get("host")
@@ -1703,7 +1703,7 @@ class App(tk.Tk):
                 remove.pack(side="right", padx=(0, 2))
 
     def _remove_player(self, pid, name):
-        if messagebox.askyesno("HyruleLink", f"Remove {name} from the room?"):
+        if messagebox.askyesno("BombosSwap", f"Remove {name} from the room?"):
             self._ui_send({"type": "admin_remove_player", "player_id": pid})
 
     # ── host: per-item found/owner management (right-click an item) ───────────
@@ -2033,7 +2033,7 @@ class App(tk.Tk):
         tk.Label(win, text="Supported emulators (auto-detected)", fg=GOLD, bg=BG,
                  font=("Segoe UI Semibold", 13)).pack(anchor="w", padx=16, pady=(14, 8))
         body = (
-            "HyruleLink reads your game's memory live. Any of these work — just have it\n"
+            "BombosSwap reads your game's memory live. Any of these work — just have it\n"
             "running with your ALTTPR seed loaded, then press Connect & Play.\n\n"
             "EASIEST (nothing extra to install):\n"
             "  • snes9x-nwa  (the EmuNetworkAccess build of snes9x) — works out of the box.\n"
@@ -2087,7 +2087,7 @@ class App(tk.Tk):
     def _use_sni(self):
         status = self._start_sni()
         if status == "missing":
-            messagebox.showwarning("HyruleLink", "Couldn't find the installed SNI. Run Install.cmd, "
+            messagebox.showwarning("BombosSwap", "Couldn't find the installed SNI. Run Install.cmd, "
                                    "or run SNI/QUsb2Snes manually, then press Connect & Play.")
             return False
         self._show_connector_help(status == "already")
@@ -2177,7 +2177,7 @@ class App(tk.Tk):
         if label == "not detected":
             if auto:
                 return None, None
-            if messagebox.askyesno("HyruleLink",
+            if messagebox.askyesno("BombosSwap",
                 "No emulator detected.\n\nStart the SNI bridge now? It's needed for snes9x-rr, "
                 "BizHawk, or real hardware.\n\n(snes9x-nwa and RetroArch connect directly — if "
                 "you're using one of those, click No and just make sure it's running.)"):
@@ -2233,7 +2233,7 @@ class App(tk.Tk):
                 return
             if getattr(self.transport, "connected", False):
                 try:
-                    self.transport.show_message("HyruleLink linked — items now sync")
+                    self.transport.show_message("BombosSwap linked — items now sync")
                 except Exception:
                     pass
                 return
@@ -2998,7 +2998,7 @@ class App(tk.Tk):
             if kind == "retroarch":
                 core = self.cfg.get("core_path") or self._guess_core(emu)
                 if not core or not os.path.exists(core):
-                    messagebox.showwarning("HyruleLink", "Pick the snes9x RetroArch core in Configure.")
+                    messagebox.showwarning("BombosSwap", "Pick the snes9x RetroArch core in Configure.")
                     self._configure_emulator(); return
                 args = [emu, "-L", core] + ([rom] if rom else []) + ["--appendconfig", self._ensure_ra_netcfg()]
             else:
@@ -3007,7 +3007,7 @@ class App(tk.Tk):
             self._log(f"Launching {kind} (network-ready)…")
             self._remember_room_rom(rom)
         except Exception as ex:
-            messagebox.showerror("HyruleLink", f"Couldn't launch emulator:\n{ex}")
+            messagebox.showerror("BombosSwap", f"Couldn't launch emulator:\n{ex}")
 
     def _configure_emulator(self):
         win = tk.Toplevel(self); win.title("Emulator setup"); win.configure(bg=BG)
@@ -3082,7 +3082,7 @@ class App(tk.Tk):
                 self._log("⚠ " + reason)
                 if self.room is not None and ("room not found" in reason.lower()
                                               or "room closed" in reason.lower()):
-                    messagebox.showinfo("HyruleLink", "This room was closed by an admin.")
+                    messagebox.showinfo("BombosSwap", "This room was closed by an admin.")
                     self._leave()
                     break
         if new_state and self.room is not None and hasattr(self, "board"):
@@ -3195,16 +3195,16 @@ class App(tk.Tk):
                 note = ("\n\nHeads up: this room still has progression from before — "
                         "your new save will immediately receive your shared items.")
                 if stale and self._is_host():
-                    if messagebox.askyesno("HyruleLink",
+                    if messagebox.askyesno("BombosSwap",
                             msg + note + "\n\nStarting the room over? Reset its progression "
                             "now? (You'll confirm with the room code.)"):
                         self._reset_room()
                 elif stale:
-                    messagebox.showinfo("HyruleLink",
+                    messagebox.showinfo("BombosSwap",
                         msg + note + " If the group is starting over, ask your host "
                         "to use Reset progression.")
                 else:
-                    messagebox.showinfo("HyruleLink", msg)
+                    messagebox.showinfo("BombosSwap", msg)
             elif kind == "progress":
                 self._log("… " + a)
             elif kind in ("warn", "msuwarn"):
@@ -3212,7 +3212,7 @@ class App(tk.Tk):
             else:
                 self._set_seedgen_busy(False)
                 self._log("Seed generation failed: " + a)
-                messagebox.showerror("HyruleLink", "Couldn't generate a seed:\n" + a)
+                messagebox.showerror("BombosSwap", "Couldn't generate a seed:\n" + a)
         # auto-rejoin result (startup thread): enter the room, or clear the memory
         while True:
             try:

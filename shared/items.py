@@ -1,6 +1,6 @@
 """
 items.py — the canonical ALTTPR progression-item catalog shared by the
-HyruleLink server and the player agent.
+BombosSwap server and the player agent.
 
 Only *progression* items are in the shared, one-owner-at-a-time pool. Ammo
 (rupees/bombs/arrows/hearts) and per-dungeon items (keys/maps/compasses) are

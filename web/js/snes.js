@@ -1,4 +1,4 @@
-/* HyruleLink - the link to the player's game.
+/* BombosSwap - the link to the player's game.
  *
  * A browser cannot open a raw TCP or UDP socket, so it cannot talk to an
  * emulator directly. It CAN open a websocket to localhost, and both bridges
@@ -268,7 +268,7 @@
       var v = String((ver.Results || [''])[0]);
       this.bridge = /sni/i.test(v) ? 'SNI' : (/qusb/i.test(v) ? 'QUsb2Snes' : 'usb2snes');
     } catch (e) { this.bridge = 'usb2snes'; throw e; }
-    this._send('Name', [this.o.name || 'HyruleLink']);
+    this._send('Name', [this.o.name || 'BombosSwap']);
     for (;;) {
       if (this._stopped || !this.ws) return;
       var list = (await this._json('DeviceList')).Results || [];

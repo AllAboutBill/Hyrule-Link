@@ -1,5 +1,5 @@
 [Unit]
-Description=HyruleLink co-op server
+Description=BombosSwap co-op server (formerly HyruleLink)
 After=network.target
 
 [Service]

@@ -1,4 +1,4 @@
-/* HyruleLink - text on the game's own HUD, no ROM patch.
+/* BombosSwap - text on the game's own HUD, no ROM patch.
  *
  * Copied verbatim from EtherNet (web/js/hud.js); only this comment differs.
  * It is a port of this repo's own agent/sni/hud_text.py (by way of the Twitch

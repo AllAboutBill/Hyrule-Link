@@ -1,1 +1,1 @@
-"""HyruleLink regression tests."""
+"""BombosSwap regression tests."""

@@ -160,7 +160,7 @@ function makePlayer(label, name, bridge, opts) {
 
   p.snes = new Snes({
     urls: [bridge],
-    name: 'HyruleLink coop_check',
+    name: 'BombosSwap coop_check',
     onStatus: (snes) => onStatus(p, snes),
     onTick: async (mod) => {
       if (!p.fake) return;                  // never poll a device that is not the fake
