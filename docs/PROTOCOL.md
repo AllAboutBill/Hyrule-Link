@@ -136,14 +136,11 @@ Agent to server:
 
 `hub.agents[code][player_id]` holds one socket. A newer agent hello replaces
 the older registration; the older socket is not closed and gets no more
-commands, though a `pickup` it sends still counts. When any agent socket for
-that player closes, the room records the player as unlinked (`agent` and
-`emu` false) and starts their offline clock, even when a newer socket is
-still registered. A `status` from the newer one sets `emu` again but not
-`agent`; only a new hello does. Until then the player shows as not linked,
-Hot Potato and Chaos pass them over, and `idle_release_s` counts against
-them. The page keeps out of this by opening its agent socket only after it
-finds a game, and only with *Link a game on this browser* on.
+commands, though a `pickup` it sends still counts. Its `status` is ignored,
+and its close changes nothing. Only the registered socket closing records the
+player as unlinked (`agent` and `emu` false) and starts their offline clock.
+The page keeps out of this by opening its agent socket only after it finds a
+game, and only with *Link a game on this browser* on.
 
 ### The ui socket
 

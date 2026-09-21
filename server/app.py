@@ -517,8 +517,9 @@ async def _serve_agent(ws, code, user_id):
         elif mtype == P.RESYNC:
             await _push_ownership(ws, code, user_id)
         elif mtype == P.STATUS:
-            hub.set_emu_status(code, user_id, msg.get("emu", False))
-            await hub.broadcast_state(code)
+            if hub.is_current_agent(code, user_id, ws):   # a replaced link can't flip the live one
+                hub.set_emu_status(code, user_id, msg.get("emu", False))
+                await hub.broadcast_state(code)
         elif mtype == P.APPLIED:
             await hub.report_applied(code, user_id, msg)
         elif mtype == P.BYE:
@@ -543,7 +544,7 @@ async def _serve_ui(ws, code, user_id, is_admin=False):
             return
         if mtype == P.CLAIM:
             if user_id is None:        # spectators/admins have no player to claim with
-                await ws.send_json({"type": P.REJECT, "reason": "watch-only — join in the app to claim"})
+                await ws.send_json({"type": P.REJECT, "reason": "watching only: join the room to claim"})
                 continue
             room = hub.rooms[code]
             eff = resolve_claim(room, user_id, msg.get("item"))

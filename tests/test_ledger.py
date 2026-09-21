@@ -37,6 +37,22 @@ class LedgerTests(unittest.TestCase):
         room.rules["steal_cooldown_s"] = 0
         return room
 
+    def test_replaced_agent_closing_keeps_the_live_link(self):
+        hub = RoomHub()
+        room = self.room()
+        hub.rooms[room.code] = room
+        old, new = object(), object()
+        hub.register_agent(room.code, 1, old)
+        hub.set_emu_status(room.code, 1, True)
+        hub.register_agent(room.code, 1, new)        # a second browser / the desktop app
+        hub.unregister_agent(room.code, 1, old)      # the replaced socket goes away
+        self.assertTrue(hub.is_current_agent(room.code, 1, new))
+        self.assertEqual(room.status[1], {"agent": True, "emu": True})
+        self.assertNotIn(1, room.offline_since)
+        hub.unregister_agent(room.code, 1, new)      # the live one closing still counts
+        self.assertEqual(room.status[1], {"agent": False, "emu": False})
+        self.assertIn(1, room.offline_since)
+
     def test_shared_discovery_allows_another_player_to_claim(self):
         room = self.room()
         resolve_pickup(room, 1, "sword", 2)

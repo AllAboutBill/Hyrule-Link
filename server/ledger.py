@@ -425,9 +425,15 @@ class RoomHub:
             room.status.setdefault(user_id, {"agent": False, "emu": False})["agent"] = True
             room.offline_since.pop(user_id, None)        # back online → reset idle timer
 
+    def is_current_agent(self, code, user_id, ws) -> bool:
+        return self.agents.get(code, {}).get(user_id) is ws
+
     def unregister_agent(self, code, user_id, ws):
-        if self.agents.get(code, {}).get(user_id) is ws:
-            del self.agents[code][user_id]
+        # A newer hello for this player (a second browser, or the desktop app)
+        # replaced this socket: its close must not mark the live link as gone.
+        if not self.is_current_agent(code, user_id, ws):
+            return
+        del self.agents[code][user_id]
         room = self.rooms.get(code)
         if room is not None:
             room.status[user_id] = {"agent": False, "emu": False}

@@ -219,9 +219,10 @@ test and `compileall`.
   right after the next hello. The hello's ownership push arrives first and
   revokes it for a moment; the find's grant puts it back.
 - **Two agents for one player.** The newest hello wins and the older socket
-  stops getting commands. It is not closed, and when it goes, the room marks
-  the player as unlinked although the newer one is still registered, until
-  that one says hello again (see
+  stops getting commands. It is not closed (closing it would make two pages
+  take turns re-registering), so its `status` is ignored and its close no
+  longer marks the player unlinked; until 2026-09-21 it did, and a second tab
+  closing showed a linked player as offline (see
   [PROTOCOL.md](PROTOCOL.md#one-agent-per-player)). The page opens its agent
   socket only after it finds a game, and only with *Link a game on this
   browser* on.
