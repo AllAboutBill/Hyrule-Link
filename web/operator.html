@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>HyruleLink operator</title>
+<link rel="icon" href="img/mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/hyrulelink.css">
+</head>
+<body class="operator">
+<nav class="sitebar" aria-label="billogna.lol"><div class="sb-in">
+  <a class="sb-home" href="https://www.billogna.lol/"><b aria-hidden="true">&larr;</b>billogna.lol</a>
+  <span class="sb-sibs"><a href="https://www.billogna.lol/ethernet/">EtherNet</a><a href="https://www.billogna.lol/connect/">QuakeCast</a><a href="./">HyruleLink</a></span>
+</div></nav>
+
+<main class="home op">
+  <header class="home-top">
+    <a class="brand" href="./" title="HyruleLink home">
+      <img src="img/hookshot.svg" width="32" height="32" alt="">
+      <span class="word">Hyrule<b>Link</b></span>
+    </a>
+    <span class="label">Operator</span>
+  </header>
+
+  <noscript><p class="err">This page needs JavaScript.</p></noscript>
+
+  <!-- The key is sent as a header on each call, never in a URL, and kept in
+       this browser only until Forget key. -->
+  <form class="panel op-key" id="keyForm" autocomplete="off" hidden>
+    <label class="label" for="keyInput">Operator key</label>
+    <div class="row">
+      <input class="field mono" id="keyInput" type="password" autocomplete="off" spellcheck="false">
+      <button class="btn primary" type="submit">Open</button>
+    </div>
+    <p class="err" id="keyErr" role="alert" hidden></p>
+  </form>
+
+  <section id="board" hidden>
+    <div class="op-head">
+      <p class="op-sum" id="sum"></p>
+      <div class="row">
+        <button class="btn small quiet" id="btnRefresh" type="button">Refresh</button>
+        <button class="btn small quiet" id="btnForget" type="button">Forget key</button>
+      </div>
+    </div>
+    <p class="err" id="boardErr" role="alert" hidden></p>
+    <div id="rooms"></div>
+  </section>
+</main>
+
+<script src="js/operator.js"></script>
+</body>
+</html>
