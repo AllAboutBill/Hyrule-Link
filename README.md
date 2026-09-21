@@ -121,8 +121,23 @@ Proven 2026-09-21, on this PC:
   reached the board at the right tier, and a claim by a second player put a
   line on the fake's HUD strip. Real clicks, focus rings and the clipboard
   were not part of it.
+- **A walk through in real Chrome** against a local server and
+  `tools/fake_snes.py`. Two players on two origins: Ana's page linked the fake,
+  Bo's page had *Link a game on this browser* off and his game linked through
+  a second fake. The seven steps above all passed in the browser, and so did
+  every host control (the Hot Potato and Chaos banners and timers, cooldown,
+  rename, the found and holder chips, remove, reset, the custom rules dialog),
+  the spectator page, the operator page, the invite link, the watch
+  redirects, 390 px layouts and keyboard-only use. With the room tab in the
+  background for over a minute, finds and grants still landed within about
+  half a second. The pass fixed six page bugs, among them a false "not
+  answering" bridge message caused by Chrome holding back new sockets.
+- **One game link per browser.** Two tabs of the same room in one Chrome
+  profile: only one linked, *Link this tab instead* moved the link, and
+  closing the linked tab let the other take over in about 130 ms, with finds
+  still reaching the board.
 
-**Live deploy and real-Chrome QA: pending.**
+**Live deploy: pending.**
 
 Proven elsewhere and relied on: EtherNet's `snes.js` and `hud.js`, which
 these are copies of, wrote HUD lines into a real snes9x-nwa through the real
