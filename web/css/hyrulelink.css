@@ -1,0 +1,608 @@
+/* HyruleLink - graphite, one gold voice, one pale-blue voice.
+ *
+ * The same skin as EtherNet (F:/EtherNet/web/css/ethernet.css) and QuakeCast
+ * (F:/RaceConnect/web/css/site.css): neutral graphite, warm paper-white text,
+ * 1px hairlines, depth by tone instead of shadow. Bricolage Grotesque for
+ * anything that is a number or a name of something, Schibsted Grotesk for
+ * reading, IBM Plex Mono for codes and clocks, Press Start 2P ONLY where the
+ * text is literally what the game will draw (.strip). Item sprites are pixel
+ * art and are scaled like it.
+ *
+ * Two accents, each with one job:
+ *   gold   ownership and the primary action: what you hold, Claim, the host
+ *   link   anything that travels into a game: the game link lamp, in-game
+ *          lines (EtherNet's --ether, same values, renamed)
+ * Radius is a scale (3 / 6 / 10 / pill), never one number.
+ * Nothing animates at rest: this tab sits beside a game. Toasts fade in, and
+ * controls answer the pointer; prefers-reduced-motion switches off both.
+ * No backdrop-filter, no blobs, no font CDN: every url() here is relative.
+ */
+
+@font-face { font-family: "Bricolage Grotesque"; font-weight: 600 700; font-display: swap;
+  src: url(../fonts/BricolageGrotesque-600.woff2) format("woff2"); }
+@font-face { font-family: "Schibsted Grotesk"; font-weight: 400 700; font-display: swap;
+  src: url(../fonts/SchibstedGrotesk-400.woff2) format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 400; font-display: swap;
+  src: url(../fonts/IBMPlexMono-Regular.ttf) format("truetype"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 500; font-display: swap;
+  src: url(../fonts/IBMPlexMono-Medium.ttf) format("truetype"); }
+@font-face { font-family: "Press Start 2P"; font-weight: 400; font-display: swap;
+  src: url(../fonts/PressStart2P-Regular.ttf) format("truetype"); }
+
+:root {
+  --bg: #0E0E10;
+  --well: #121215;
+  --surface: #17171A;
+  --raised: #1D1D21;
+  --lift: #26262B;
+
+  --hair: rgba(255, 255, 255, .075);
+  --hair-top: rgba(255, 255, 255, .12);
+  --hair-strong: rgba(255, 255, 255, .18);
+
+  --ink: #F3F1EA;
+  --ink2: #BDBBB3;
+  --mute: #918F87;
+  --faint: #5F5E59;
+
+  --gold: #E6B143;
+  --gold-hi: #F1C158;
+  --gold-lo: #C9962F;
+  --on-gold: #171512;
+  --gold-wash: rgba(230, 177, 67, .09);
+  --gold-line: rgba(230, 177, 67, .42);
+
+  --link: #9FD9E8;
+  --link-wash: rgba(159, 217, 232, .08);
+  --link-line: rgba(159, 217, 232, .38);
+
+  --ok: #6FCF97;
+  --bad: #E5928D;
+
+  --r-sm: 3px;
+  --r-md: 6px;
+  --r-lg: 10px;
+  --r-pill: 999px;
+
+  --display: "Bricolage Grotesque", "Schibsted Grotesk", "Segoe UI", sans-serif;
+  --body: "Schibsted Grotesk", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", Consolas, monospace;
+  --pixel: "Press Start 2P", "IBM Plex Mono", monospace;
+
+  --gutter: 16px;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; min-height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 15px/1.5 var(--body);
+  font-feature-settings: "ss01";
+}
+/* One warm light from the upper right, and film grain so the flats are not
+   dead. Both are fixed layers that never repaint. */
+body::before {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    radial-gradient(1100px 620px at 86% -12%, rgba(230, 177, 67, .07), transparent 62%),
+    radial-gradient(900px 700px at -10% 110%, rgba(159, 217, 232, .035), transparent 60%);
+}
+body::after {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0; opacity: .035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+body > * { position: relative; z-index: 1; }
+
+a { color: var(--gold); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:hover { color: var(--gold-hi); }
+h1, h2, h3 { font-family: var(--display); font-weight: 700; letter-spacing: -.015em; margin: 0; }
+p { margin: 0; }
+button, input, select, textarea { font: inherit; color: inherit; }
+/* KEEP. .btn sets display:inline-flex, which beats the browser's own [hidden]
+   rule; without !important a hidden button stays on screen. */
+[hidden] { display: none !important; }
+:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; border-radius: var(--r-sm); }
+
+.label {
+  font: 600 11px/1 var(--body); letter-spacing: .14em; text-transform: uppercase; color: var(--mute);
+}
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.hint { font-size: 13px; color: var(--mute); }
+.err { font-size: 13.5px; color: var(--bad); }
+.empty { padding: 10px 0; font-size: 13.5px; color: var(--mute); }
+.row { display: flex; gap: 8px; align-items: center; min-width: 0; }
+
+/* ------------------------------------------------------------- controls */
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 40px; padding: 0 18px;
+  border: 1px solid var(--hair-strong); border-top-color: rgba(255, 255, 255, .24);
+  border-radius: var(--r-md);
+  background: var(--raised); color: var(--ink);
+  font: 600 14px/1 var(--body); letter-spacing: .01em;
+  cursor: pointer; user-select: none; white-space: nowrap;
+  transition: background .12s, border-color .12s, transform .06s;
+}
+a.btn { text-decoration: none; }
+a.btn:hover { color: var(--ink); }
+.btn:hover { background: var(--lift); }
+.btn:active { transform: translateY(1px); }
+.btn[disabled] { opacity: .45; cursor: default; transform: none; }
+.btn[disabled]:hover { background: var(--raised); }
+.btn.primary {
+  background: linear-gradient(180deg, #EFBE52, #DFA93C); color: var(--on-gold);
+  border-color: var(--gold-lo); border-top-color: #F6D687;
+}
+.btn.primary:hover { background: linear-gradient(180deg, #F5C75F, #E7B144); color: var(--on-gold); }
+.btn.big { min-height: 52px; padding: 0 28px; font: 700 17px/1 var(--display); letter-spacing: 0; }
+.btn.quiet { background: transparent; border-color: var(--hair); color: var(--ink2); }
+.btn.quiet:hover { background: var(--raised); color: var(--ink); }
+.btn.danger { color: var(--bad); }
+.btn.danger.armed { background: rgba(229, 146, 141, .14); border-color: rgba(229, 146, 141, .5); }
+.btn.small { min-height: 30px; padding: 0 11px; font-size: 12.5px; }
+.btn.on { border-color: var(--gold-line); background: var(--gold-wash); color: var(--gold-hi); }
+
+.field {
+  width: 100%; min-height: 42px; padding: 0 12px;
+  background: var(--well); border: 1px solid var(--hair-strong); border-radius: var(--r-md);
+  color: var(--ink);
+}
+.field::placeholder { color: var(--faint); }
+.field:focus { outline: none; border-color: var(--gold-line); box-shadow: 0 0 0 3px var(--gold-wash); }
+.field[disabled], .field[readonly] { color: var(--ink2); }
+select.field { appearance: none; -webkit-appearance: none; padding-right: 30px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--mute) 50%), linear-gradient(135deg, var(--mute) 50%, transparent 50%);
+  background-position: calc(100% - 16px) 50%, calc(100% - 11px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
+select.field option { background: var(--surface); color: var(--ink); }
+.field.code { font: 500 20px/1 var(--mono); letter-spacing: .24em; text-transform: uppercase; text-align: center; }
+/* numbers with a unit after them: <input class="field num" type="number"><span class="unit">s</span> */
+.field.num { width: 6.5em; min-height: 34px; padding: 0 8px; font: 500 14px/1 var(--mono); text-align: right; }
+.unit { font-size: 13px; color: var(--mute); }
+
+.check { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink2); cursor: pointer; }
+.check input { accent-color: var(--gold); width: 15px; height: 15px; margin: 0; }
+
+/* on/off: <label class="switch"><input type="checkbox" role="switch"><span>On</span></label> */
+.switch { display: inline-flex; align-items: center; gap: 9px; font-size: 13.5px; color: var(--ink2); cursor: pointer; user-select: none; }
+.switch input {
+  appearance: none; -webkit-appearance: none; position: relative; flex: none; margin: 0;
+  width: 34px; height: 20px; border-radius: var(--r-pill);
+  background: var(--well); border: 1px solid var(--hair-strong); cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+.switch input::before {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--mute); transition: transform .12s, background .12s;
+}
+.switch input:checked { background: var(--gold-wash); border-color: var(--gold-line); }
+.switch input:checked::before { transform: translateX(14px); background: var(--gold); }
+.switch input:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; border-radius: var(--r-pill); }
+.switch input:disabled { opacity: .45; cursor: default; }
+.switch input:checked + span { color: var(--ink); }
+
+.panel {
+  background: linear-gradient(180deg, var(--raised), var(--surface));
+  border: 1px solid var(--hair); border-top-color: var(--hair-top);
+  border-radius: var(--r-lg);
+}
+/* a titled panel: <section class="panel"><div class="panel-head"><h2>..</h2><span class="label">..</span></div><div class="panel-body">.. */
+.panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  padding: 13px 16px 10px; border-bottom: 1px solid var(--hair); }
+.panel-head h2 { font-size: 16px; min-width: 0; }
+.panel-body { padding: 8px 16px 14px; }
+
+.pill { display: inline-block; margin-left: 7px; padding: 2px 6px; border-radius: var(--r-sm); vertical-align: 1px;
+  font: 600 10px/1.2 var(--body); letter-spacing: .1em; text-transform: uppercase;
+  color: var(--mute); border: 1px solid var(--hair-strong); white-space: nowrap; }
+.pill.host { color: var(--gold); border-color: var(--gold-line); }
+.pill.link { color: var(--link); border-color: var(--link-line); }
+
+.icon-btn { width: 30px; height: 30px; display: grid; place-items: center; border-radius: var(--r-md);
+  background: transparent; border: 1px solid transparent; color: var(--mute); cursor: pointer; }
+.icon-btn:hover { color: var(--ink); border-color: var(--hair-strong); background: var(--raised); }
+.icon-btn svg { width: 15px; height: 15px; }
+
+.avatar { width: 16px; height: 16px; border-radius: 50%; object-fit: cover; vertical-align: -3px; margin-right: 5px; }
+
+/* -------------------------------------------------------- billogna bar */
+
+/* One quiet line above everything: the way back to billogna.lol, and across
+   to EtherNet and QuakeCast. The room page opens them in a new tab, so a
+   stray click mid-run never leaves the room. */
+.sitebar { background: var(--well); border-bottom: 1px solid var(--hair); }
+.sitebar .sb-in {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  max-width: 1080px; margin: 0 auto; min-height: 34px; padding: 0 var(--gutter);
+  font: 500 12.5px/1 var(--body);
+}
+.room .sitebar .sb-in { max-width: none; }
+.sitebar a { color: var(--mute); text-decoration: none; padding: 6px 0; white-space: nowrap; }
+.sitebar a:hover, .sitebar a:focus-visible { color: var(--ink); }
+.sitebar .sb-home b { color: var(--gold); font-weight: 600; margin-right: 6px; }
+.sitebar .sb-sibs { display: flex; gap: 18px; }
+.sitebar .sb-sibs [aria-current="page"] { color: var(--ink2); box-shadow: inset 0 -1px var(--gold-line); }
+
+/* ---------------------------------------------------------------- brand */
+
+.brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); flex: none; }
+.brand:hover { color: var(--ink); }
+/* the hookshot, pixel for pixel (tools/make_mark.py). 32 px is exactly 2x the
+   16 px box, so every pixel of it lands on whole screen pixels. */
+.brand img { width: 32px; height: 32px; flex: none; image-rendering: pixelated; }
+.brand .word { font: 700 20px/1 var(--display); letter-spacing: -.02em; }
+.brand .word b { color: var(--gold); font-weight: 700; }
+
+/* ------------------------------------------------------------ home page */
+
+.home { max-width: 1080px; margin: 0 auto; padding: 28px var(--gutter) 64px; }
+.home-top { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 9vh; }
+.home-top nav a { color: var(--ink2); font-size: 14px; margin-left: 20px; text-decoration: none; }
+.home-top nav a:hover { color: var(--ink); }
+.home-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(300px, 400px); gap: 56px; align-items: start; }
+.home h1 { font-size: clamp(38px, 5.6vw, 68px); line-height: 1; letter-spacing: -.035em; }
+.home h1 em { font-style: normal; color: var(--gold); }
+.lede { margin-top: 24px; max-width: 34em; font-size: 18px; color: var(--ink2); }
+.works { margin-top: 30px; display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+.works .label { margin-right: 6px; }
+.tag { padding: 4px 9px; border: 1px solid var(--hair-strong); border-radius: var(--r-sm);
+  font: 500 12px/1.2 var(--mono); color: var(--ink2); }
+.foot { margin-top: 48px; color: var(--mute); font-size: 13px; display: flex; gap: 18px; flex-wrap: wrap; }
+
+.door { padding: 22px; }
+.door + .door { margin-top: 14px; }
+.door h2 { font-size: 19px; margin-bottom: 14px; }
+.door .row { margin-top: 8px; }
+.door .btn { width: 100%; margin-top: 12px; }
+.door .hint { margin-top: 10px; }
+.door .err { margin-top: 10px; }
+
+/* "Your rooms on this browser" and "Live rooms": the same list.
+   <div class="panel recent"><p class="label">..</p><p class="recent-note">..</p>
+     <div class="recent-row"><a href="room.html?room=CODE"><span class="t">Name</span><span class="mono">CODE</span></a>
+       <span class="recent-state on">2 in it now</span><button class="btn small quiet">..</button><p class="recent-err" hidden></p></div>
+   Live rooms put <div class="meta"><span class="t">Name</span><small>Ana, Bo</small></div> where the link is,
+   and <a class="btn small" href="room.html?watch=PUB">Watch</a> last. */
+.recent { margin-top: 14px; padding: 14px 22px; }
+.recent > .label { display: block; margin-bottom: 8px; }
+.recent-note { font-size: 13px; color: var(--mute); margin-bottom: 8px; }
+.recent-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px 12px; align-items: center;
+  padding: 7px 0; border-top: 1px solid var(--hair); }
+.recent-row:first-child, :not(.recent-row) + .recent-row { border-top: 0; }
+/* the room name over its 10-character code */
+.recent-row a:not(.btn) { display: flex; flex-direction: column; gap: 1px; min-width: 0; text-decoration: none;
+  color: var(--ink2); font-size: 14px; }
+.recent-row a:not(.btn):hover { color: var(--ink); }
+.recent-row a:not(.btn) .mono { font-size: 12px; color: var(--mute); letter-spacing: .06em; }
+.recent-row .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-row .meta { min-width: 0; }
+.recent-row .meta .t { display: block; font-size: 14px; color: var(--ink); }
+.recent-row .meta small { display: block; margin-top: 1px; font-size: 12.5px; color: var(--mute);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-state { font: 500 12px/1 var(--mono); color: var(--mute); white-space: nowrap; }
+.recent-state.on { color: var(--ok); }
+.recent-err { grid-column: 1 / -1; font-size: 13px; color: var(--bad); }
+
+/* the operator page */
+.op { max-width: 860px; }
+.op .home-top { margin-bottom: 32px; }
+.op .err { margin-top: 10px; }
+.op-key { padding: 20px 22px; max-width: 460px; }
+.op-key .row { margin-top: 8px; }
+.op-key .field { flex: 1; min-width: 0; }
+.op-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.op-head .row { gap: 6px; }
+.op-sum { font: 500 13px/1.3 var(--mono); color: var(--ink2); }
+.op-empty { color: var(--mute); }
+.op-room { padding: 16px 20px; margin-bottom: 10px; }
+.op-room.live { border-color: var(--gold-line); }
+.op-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.op-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.op-title b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.op-title .mono { color: var(--ink2); font-size: 13px; }
+.op-facts { margin-top: 6px; font-size: 13px; color: var(--mute); }
+.op-people { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 14px; color: var(--ink2); }
+/* the dot means what .dot means on the room page: .on = game linked (agent
+   and emulator), .warn = agent connected but no game, neither = offline */
+.op-person::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%;
+  background: var(--hair-strong); vertical-align: 1px; }
+.op-person.on { color: var(--ink); }
+.op-person.on::before { background: var(--link); }
+.op-person.warn::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--mute); }
+.op-person small { color: var(--mute); font-size: 12px; }
+.op-foot { margin-top: 10px; display: flex; justify-content: flex-end; gap: 6px; }
+
+/* ------------------------------------------------------- the HUD strip */
+
+/* Twenty cells, the game's width. The text in here is exactly what the
+   game will draw, so it is the one place the pixel face appears. */
+.strip {
+  display: inline-grid; grid-template-columns: repeat(20, 1fr); gap: 0;
+  padding: 7px 8px; background: #08080A; border: 1px solid var(--link-line); border-radius: var(--r-sm);
+  font: 400 11px/1 var(--pixel); color: #F8F8F8; max-width: 100%;
+}
+.strip i { width: 13px; height: 13px; display: grid; place-items: center; font-style: normal; }
+.strip.idle { border-color: var(--hair-strong); color: var(--faint); }
+
+/* ------------------------------------------------------------ room page */
+
+.bar {
+  display: flex; align-items: center; gap: 18px; padding: 12px var(--gutter);
+  border-bottom: 1px solid var(--hair); background: rgba(14, 14, 16, .94);
+  position: sticky; top: 0; z-index: 5;
+}
+.bar-title { min-width: 0; flex: 1; display: flex; align-items: baseline; gap: 12px; }
+.bar-title h1 { font-size: 17px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bar-title .label { white-space: nowrap; }
+.bar-right { display: flex; align-items: center; gap: 8px; }
+.code-chip { display: inline-flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 12px;
+  background: var(--well); border: 1px solid var(--hair-strong); border-radius: var(--r-md); cursor: pointer; }
+.code-chip b { font: 500 15px/1 var(--mono); letter-spacing: .14em; color: var(--gold-hi); }
+.code-chip span { font-size: 12.5px; color: var(--mute); white-space: nowrap; }
+.code-chip:hover span { color: var(--ink); }
+.net-lamp { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+.net-lamp.ok { background: var(--ok); }
+.net-lamp.bad { background: var(--bad); }
+
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); gap: 18px;
+  max-width: 1320px; margin: 0 auto; padding: 18px var(--gutter) 28px; align-items: start; }
+.stage { display: grid; gap: 14px; min-width: 0; }
+.side { display: grid; gap: 14px; min-width: 0; align-content: start; }
+
+.seed-line { display: flex; gap: 12px; align-items: baseline; padding: 11px 16px; font-size: 14px; }
+.seed-line a, .seed-line span.v { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.banner { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 11px 16px; font-size: 14px;
+  border-color: var(--gold-line); background: var(--gold-wash); }
+
+/* Hot Potato, Chaos, Custom: what the room is playing, in one line.
+   <div class="mode-banner"><b class="mode">Chaos</b><span class="summary">rules_summary</span>
+     <span class="next">Next shuffle <b>1:24</b></span></div> */
+.mode-banner { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 11px 16px;
+  font-size: 14px; color: var(--ink2);
+  border: 1px solid var(--gold-line); border-radius: var(--r-lg);
+  background: linear-gradient(90deg, var(--gold-wash), transparent 80%), var(--surface); }
+.mode-banner .mode { font: 700 16px/1.2 var(--display); letter-spacing: -.01em; color: var(--gold-hi); }
+.mode-banner .summary { flex: 1 1 16em; min-width: 0; }
+.mode-banner .next { margin-left: auto; font-size: 13px; color: var(--mute); white-space: nowrap; }
+.mode-banner .next b { font: 500 13px/1 var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+
+/* ---------------------------------------------------------- the board */
+
+/* One card per catalog item, in catalog order.
+   <div class="item mine|owned|unowned|undiscovered">
+     <div class="item-head"><img class="item-icon" src="items/sword-2.png" alt="">
+       <div class="item-name">Sword <span class="tier">Master</span></div></div>
+     <div class="item-sub">Held by <b>Ana</b></div>
+     <div class="item-sub hold">Hold 1:42</div>
+     <div class="item-foot">  (bottom of the card: one action, then the host chips)
+       <button class="btn small">Claim</button> | <button class="btn small" disabled>Cooldown 12s</button>
+       | <div class="held">You hold this</div> | <div class="item-sub locked">Find one to claim</div>
+       | <div class="item-sub held">Secured</div>
+       <div class="chips"><button class="chip on owner">Ana</button><button class="chip">Bo</button></div>
+     </div></div> */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.panel > .grid { padding: 12px; }
+.item {
+  display: flex; flex-direction: column; gap: 6px; min-width: 0; min-height: 108px;
+  padding: 11px 12px 12px;
+  background: linear-gradient(180deg, var(--raised), var(--surface));
+  border: 1px solid var(--hair); border-top-color: var(--hair-top); border-radius: var(--r-md);
+}
+.item-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.item-icon { width: 40px; height: 40px; flex: none; object-fit: contain; image-rendering: pixelated; }
+.item-name { min-width: 0; font: 600 14.5px/1.25 var(--body); overflow-wrap: anywhere; }
+.tier { display: inline-block; margin-left: 2px; padding: 2px 5px; border: 1px solid var(--hair-strong); border-radius: var(--r-sm);
+  font: 600 10px/1.2 var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--ink2);
+  vertical-align: 1px; white-space: nowrap; }
+.item-sub { min-width: 0; font-size: 12.5px; line-height: 1.35; color: var(--mute); overflow-wrap: anywhere; }
+.item-sub b, .item-sub strong { font-weight: 600; color: var(--ink2); }
+/* hold / borrow / tenure countdowns */
+.item-sub.hold { font: 500 12px/1.35 var(--mono); font-variant-numeric: tabular-nums; color: var(--ink2); }
+/* why you cannot claim it */
+.item-sub.locked { color: var(--mute); }
+/* secured: nobody can take it right now */
+.item-sub.held { font: 600 11px/1.2 var(--body); letter-spacing: .12em; text-transform: uppercase; color: var(--ink2); }
+/* you hold it */
+.held { font: 600 11px/1.2 var(--body); letter-spacing: .13em; text-transform: uppercase; color: var(--gold); }
+.item-foot { margin-top: auto; display: grid; gap: 8px; min-width: 0; padding-top: 2px; }
+.item > .btn, .item > .held:not(.item-sub) { margin-top: auto; }
+.item .btn { width: 100%; }
+.item .btn:not([disabled]):hover { border-color: var(--gold-line); color: var(--gold-hi); }
+.item .btn.primary:not([disabled]):hover { color: var(--on-gold); }
+/* a disabled button in a card is waiting (a cooldown), not broken */
+.item .btn[disabled] { opacity: 1; background: transparent; border-style: dashed; border-color: var(--hair-strong);
+  color: var(--mute); font-variant-numeric: tabular-nums; }
+
+.item.mine { border-color: var(--gold-line);
+  background: linear-gradient(var(--gold-wash), var(--gold-wash)), linear-gradient(180deg, var(--raised), var(--surface)); }
+.item.mine .tier { color: var(--gold-hi); border-color: var(--gold-line); }
+.item.mine .item-sub b, .item.mine .item-sub strong { color: var(--gold-hi); }
+.item.owned { border-color: var(--hair-strong); }
+.item.unowned { border-style: dashed; border-color: var(--hair-strong); background: var(--surface); }
+.item.unowned .item-icon { opacity: .72; filter: grayscale(.45); }
+.item.undiscovered { border-style: dashed; border-color: var(--hair); background: transparent; }
+.item.undiscovered .item-icon { opacity: .36; filter: grayscale(1); }
+.item.undiscovered .item-name { color: var(--mute); }
+
+/* host chips: one per player. Click = found / not found, shift-click = owner. */
+.chips { display: flex; flex-wrap: wrap; gap: 4px; padding-top: 8px; border-top: 1px dashed var(--hair-strong); }
+.chip { display: inline-flex; align-items: center; min-height: 22px; max-width: 100%; padding: 0 8px;
+  border: 1px solid var(--hair-strong); border-radius: var(--r-pill); background: transparent;
+  font: 600 11px/1 var(--body); color: var(--mute); cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: background .12s, color .12s, border-color .12s; }
+.chip:hover { color: var(--ink); border-color: rgba(255, 255, 255, .32); }
+/* found it */
+.chip.on { background: var(--lift); border-color: rgba(255, 255, 255, .28); color: var(--ink); }
+/* holds it */
+.chip.owner { background: var(--gold-wash); border-color: var(--gold-line); color: var(--gold-hi); }
+.chip.owner::before { content: ""; flex: none; width: 5px; height: 5px; margin-right: 5px; border-radius: 50%; background: var(--gold); }
+
+/* --------------------------------------------------- the game link row */
+
+.links { display: grid; }
+.links > .link { display: grid; grid-template-columns: 136px minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 13px 18px; }
+.links > .link + .link { border-top: 1px solid var(--hair); }
+.links .what { display: flex; align-items: center; gap: 9px; font: 600 12px/1 var(--body); letter-spacing: .13em; text-transform: uppercase; color: var(--ink2); }
+.lamp { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex: none; }
+.lamp.ok { background: var(--link); box-shadow: 0 0 0 3px var(--link-wash); }
+.lamp.gold { background: var(--gold); box-shadow: 0 0 0 3px var(--gold-wash); }
+.lamp.wait { background: transparent; border: 2px solid var(--mute); }
+.links .say { font-size: 14px; color: var(--ink2); min-width: 0; }
+.links .say small { display: block; font-size: 12.5px; color: var(--mute); margin-top: 2px; }
+.links .do { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.links .do .field { min-height: 32px; width: auto; font-size: 13px; }
+
+/* ------------------------------------------------ players and activity */
+
+/* <ul class="players"><li class="me"><span class="dot on"></span><span class="name">Ana</span>
+     <span class="pill host">Host</span><small>game linked</small></li></ul>
+   (a Remove button goes last in the li on the host's list) */
+.players { list-style: none; margin: 0; padding: 0; }
+.players li { display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 6px 0; border-top: 1px solid var(--hair); font-size: 14px; }
+.players li:first-child { border-top: 0; }
+.players .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.players li.me .name { color: var(--gold-hi); }
+.players .pill { margin-left: 0; }
+.players small { margin-left: auto; font-size: 12px; color: var(--mute); white-space: nowrap; }
+.players li > .btn { margin-left: auto; }
+.players small + .btn { margin-left: 4px; }
+/* .on = game linked (agent and emulator), .warn = agent up, no game, .off / none = offline */
+.dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.dot.on { background: var(--link); box-shadow: 0 0 0 3px var(--link-wash); }
+.dot.warn { background: transparent; box-shadow: inset 0 0 0 1.5px var(--mute); }
+.dot.off { background: var(--faint); }
+
+/* newest first; .warn = rejects and errors, .link = a line that went to a game.
+   <ul class="log"><li><span class="t">21:04</span>Ana found the Hookshot</li></ul> */
+.log { list-style: none; margin: 0; padding: 0; max-height: 360px; overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: var(--lift) transparent; }
+.log li { padding: 5px 8px 5px 10px; margin: 1px 0; border-left: 2px solid transparent;
+  font-size: 13.5px; line-height: 1.42; color: var(--ink2); overflow-wrap: anywhere; }
+.log li .t { float: right; margin-left: 8px; font: 400 11px/1.9 var(--mono); color: var(--faint); }
+.log li.warn { color: var(--bad); border-left-color: rgba(229, 146, 141, .55); }
+.log li.link { color: var(--ink); border-left-color: var(--link); background: linear-gradient(90deg, var(--link-wash), transparent 75%); }
+
+/* ------------------------------------------------------------ the host */
+
+/* The host's controls: a .panel with a gold hairline. As <details> it folds:
+   <details class="panel host" open><summary class="panel-head"><h2>Host</h2><span class="label">..</span></summary>
+     <div class="panel-body"><div class="set">..</div></div></details> */
+.host { border-color: var(--gold-line); }
+.host .panel-head .label { color: var(--gold); }
+.host > summary { list-style: none; cursor: pointer; user-select: none; }
+.host > summary::-webkit-details-marker { display: none; }
+.host > summary::after { content: ""; flex: none; align-self: center; width: 7px; height: 7px; margin: -3px 2px 0 0;
+  border-right: 1.5px solid var(--mute); border-bottom: 1.5px solid var(--mute); transform: rotate(45deg); }
+.host:not([open]) > summary { border-bottom: 0; }
+.host:not([open]) > summary::after { transform: rotate(-45deg); margin-top: 0; }
+.host > summary .label { margin-left: auto; }
+.host .set .row { flex-wrap: wrap; }
+
+/* ------------------------------------------------------ join + dialogs */
+
+.cover { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: var(--gutter);
+  background: rgba(10, 10, 12, .92); }
+.cover .panel { width: min(430px, 100%); padding: 26px; }
+.cover h2 { font-size: 24px; }
+.cover .sub { margin: 6px 0 18px; color: var(--ink2); }
+.cover .btn { width: 100%; margin-top: 10px; }
+.cover .err { margin-top: 12px; font-size: 14px; }
+
+dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--hair-strong); border-radius: var(--r-lg); }
+dialog[open] { display: flex; flex-direction: column; }
+dialog.wide { width: min(780px, calc(100vw - 32px)); }
+dialog::backdrop { background: rgba(8, 8, 10, .74); }
+.dlg-head { flex: none; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 18px 22px 14px; border-bottom: 1px solid var(--hair); }
+.dlg-head h2 { font-size: 20px; }
+.dlg-body { flex: 1 1 auto; min-height: 0; padding: 8px 22px 22px; overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: var(--lift) transparent; }
+.dlg-body h3 { font: 600 11px/1 var(--body); letter-spacing: .14em; text-transform: uppercase; color: var(--mute); margin: 20px 0 8px; }
+.dlg-body > p:not([class]) { margin-top: 12px; font-size: 14px; color: var(--ink2); }
+.dlg-foot { flex: none; display: flex; justify-content: flex-end; gap: 8px; padding: 14px 22px; border-top: 1px solid var(--hair); }
+.set { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 220px); gap: 14px; align-items: center; padding: 10px 0; border-top: 1px solid var(--hair); }
+.set:first-of-type { border-top: 0; }
+.set .k { font-size: 14.5px; }
+.set .k small { display: block; color: var(--mute); font-size: 12.5px; margin-top: 2px; }
+.set > .btn, .set > .switch, .set > .check { justify-self: end; }
+.set .row > .field:not(.num) { flex: 1 1 8em; width: auto; min-width: 0; }
+.set.wide { grid-template-columns: 1fr; gap: 7px; }
+.set.wide > .btn, .set.wide > .switch, .set.wide > .check { justify-self: start; }
+.set-err { margin: 0 0 10px; font-size: 13.5px; color: var(--bad); }
+.how { counter-reset: how; display: grid; gap: 0; margin: 4px 0 0; padding: 0; list-style: none; }
+.how li { counter-increment: how; display: grid; grid-template-columns: 34px 1fr; gap: 6px; padding: 13px 0; border-top: 1px solid var(--hair); color: var(--ink2); font-size: 14.5px; }
+.how li:first-child { border-top: 0; }
+.how li::before { content: counter(how); font: 700 20px/1.1 var(--display); color: var(--gold); }
+.how b { color: var(--ink); }
+.how table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13.5px; }
+.how td { padding: 6px 8px 6px 0; border-top: 1px solid var(--hair); vertical-align: top; }
+.how td:first-child { color: var(--ink); white-space: nowrap; width: 38%; }
+
+/* the custom ruleset (a dialog.wide): presets, a summary, then four fieldsets
+   <div class="rules-presets"><span class="label">Start from</span><button class="btn small quiet">Normal</button>..</div>
+   <p class="rules-summary">..</p>
+   <div class="rules-grid"><fieldset><legend>Claiming and stealing</legend>
+     <label><input type="checkbox"> Allow manual claiming</label>
+     <label>Steal cooldown <input class="field num" type="number"> <span class="unit">s</span></label>
+     <label>Cooldown applies to <select class="field">..</select></label></fieldset>..</div> */
+.rules-presets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 14px 0 12px; }
+.rules-presets .label { margin-right: 4px; }
+.rules-summary { min-height: 38px; padding: 9px 12px; border: 1px dashed var(--hair-strong); border-radius: var(--r-md);
+  font-size: 13.5px; color: var(--ink2); }
+.rules-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; align-items: start; }
+.rules-grid fieldset { display: grid; gap: 9px; min-width: 0; margin: 0; padding: 8px 14px 14px;
+  background: var(--well); border: 1px solid var(--hair); border-radius: var(--r-md); }
+.rules-grid legend { padding: 0 6px; margin-left: -6px; font: 600 11px/1 var(--body); letter-spacing: .14em; text-transform: uppercase; color: var(--mute); }
+.rules-grid label { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; font-size: 13.5px; color: var(--ink2); }
+.rules-grid label > .field:not(.num) { width: auto; min-height: 32px; font-size: 13px; }
+.rules-grid label > select.field { flex: 1 1 11em; min-width: 0; }
+.rules-grid input[type="checkbox"] { accent-color: var(--gold); width: 15px; height: 15px; margin: 0; }
+.rules-grid .hint { font-size: 12.5px; }
+
+.toasts { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 40; display: grid; gap: 8px; width: min(440px, calc(100vw - 32px)); }
+.toast { padding: 11px 14px; border-radius: var(--r-md); background: var(--lift); border: 1px solid var(--hair-strong); font-size: 14px;
+  animation: toast-in .18s ease-out; }
+.toast.bad { border-color: rgba(229, 146, 141, .5); }
+.toast.link { border-color: var(--link-line); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
+
+/* --------------------------------------------------------------- narrow */
+
+@media (max-width: 940px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .home-grid { grid-template-columns: minmax(0, 1fr); gap: 34px; }
+  .home-top { margin-bottom: 40px; }
+}
+@media (max-width: 620px) {
+  .rules-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  .sitebar .sb-sibs { gap: 12px; }
+  .home-top nav { display: none; }
+  .bar { flex-wrap: wrap; gap: 10px; }
+  .bar .brand .word { display: none; }
+  .bar-title { order: 3; flex-basis: 100%; }
+  .bar-right { margin-left: auto; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(136px, 1fr)); }
+  .item { padding: 10px 10px 11px; }
+  .item-head { gap: 8px; }
+  .links > .link { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .links .do { justify-content: flex-start; }
+  .set { grid-template-columns: 1fr; gap: 6px; }
+  .set > .btn, .set > .switch, .set > .check { justify-self: start; }
+  .dlg-head, .dlg-foot { padding-left: 16px; padding-right: 16px; }
+  .dlg-body { padding: 8px 16px 18px; }
+  .mode-banner .next { margin-left: 0; }
+  .strip { font-size: 9px; padding: 6px; }
+  .strip i { width: 11px; height: 12px; }
+  .code-chip span { display: none; }
+  .op-room { padding: 14px 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
