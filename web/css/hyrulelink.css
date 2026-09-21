@@ -606,3 +606,48 @@ dialog::backdrop { background: rgba(8, 8, 10, .74); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ------------------------------------------------------------------ Bombos
+   Bombos, once per open (js/intro.js; index.html and room.html, never
+   operator.html, never for reduced motion). The medallion is held up, a
+   spiral of fire columns winds out of it, bursts go off across the page as
+   the front passes, and every panel the front reaches flares for half a
+   second. The fire is one canvas at a third of the page's resolution,
+   scaled up pixelated, so a fire pixel is the raised medallion's pixel. The
+   ember orange and red live in this block and nowhere else; the script
+   reads the --fire-* tokens off the canvas. All of it is gone after 1.75 s. */
+.bombos-fire {
+  --fire-core: #FFF1C9; --fire-gold: var(--gold-hi); --fire-ember: #E07A30; --fire-red: #A8391F;
+  position: fixed; left: 0; top: 0; z-index: 90; pointer-events: none;
+  image-rendering: pixelated;
+  animation: bombos-out .3s steps(3, end) 1.45s forwards;
+}
+@keyframes bombos-out { to { opacity: 0; } }
+
+/* the medallion held up: 1.5x is 3 screen px a sprite pixel, still whole */
+.brand img.bombos-raise { animation: bombos-raise .95s ease-out; }
+@keyframes bombos-raise {
+  0%   { transform: none; filter: none; }
+  14%  { transform: translateY(-3px) scale(1.5); filter: brightness(1.3) drop-shadow(0 0 6px rgba(224, 122, 48, .7)); }
+  60%  { transform: translateY(-3px) scale(1.5); filter: brightness(1.12) drop-shadow(0 0 10px rgba(224, 122, 48, .45)); }
+  100% { transform: none; filter: none; }
+}
+
+/* caught in it: the hairline flares gold, then embers down in the game's
+   palette steps rather than a smooth fade */
+.bombos-caught { animation: bombos-ember .52s steps(1, end); }
+@keyframes bombos-ember {
+  0%  { border-color: var(--gold-hi); box-shadow: 0 0 0 1px var(--gold-line), 0 0 24px rgba(224, 122, 48, .32), inset 0 0 18px rgba(224, 122, 48, .1); }
+  18% { border-color: #E07A30; box-shadow: 0 0 0 1px rgba(224, 122, 48, .4), 0 0 18px rgba(168, 57, 31, .3), inset 0 0 14px rgba(168, 57, 31, .08); }
+  36% { border-color: var(--gold); box-shadow: 0 0 16px rgba(224, 122, 48, .22), inset 0 0 10px rgba(224, 122, 48, .06); }
+  58% { border-color: rgba(224, 122, 48, .5); box-shadow: 0 0 10px rgba(168, 57, 31, .18); }
+  80% { border-color: rgba(168, 57, 31, .35); box-shadow: 0 0 4px rgba(168, 57, 31, .1); }
+}
+h1.bombos-caught { animation-name: bombos-ember-type; }
+@keyframes bombos-ember-type {
+  0%  { text-shadow: 0 0 18px rgba(224, 122, 48, .55), 0 0 2px rgba(255, 241, 201, .8); }
+  18% { text-shadow: 0 0 14px rgba(168, 57, 31, .5); }
+  36% { text-shadow: 0 0 12px rgba(224, 122, 48, .35); }
+  58% { text-shadow: 0 0 8px rgba(168, 57, 31, .25); }
+  80% { text-shadow: none; }
+}
