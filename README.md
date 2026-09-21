@@ -1,268 +1,167 @@
 # HyruleLink
 
-**Archipelago-style _shared-inventory_ co-op for A Link to the Past Randomizer.**
+**https://www.billogna.lol/hyrulelink/** and **https://hyrulelink.billogna.lol**
 
-Every player generates and plays their **own** seed. But the *progression
-inventory is a shared pool*: each item type (sword, bow, hookshot, …) can be
-held by **only one player at a time**.
+Every player their own seed. One shared inventory.
 
-- Player A finds a sword → A has it; nobody else can.
-- B and C keep playing. When **B finds a sword** in their own world, ownership
-  moves to B and **A's sword is disabled live**.
-- A wants it back → clicks **Claim** in the web app; A's sword re-enables and
-  B's disables.
-- You can only **Claim** an item you have **personally found** at least once.
-- Progressive tiers are **per player**: you get back the best version **you**
-  have personally found. If A found a Master Sword and B found a Gold Sword,
-  claiming "the sword" gives **A a Master** and **B a Gold** — A only reaches
-  Gold once A finds Tempered/Gold themselves.
+Co-op for A Link to the Past Randomizer where the progression items are one
+pool. Each player plays their own seed, from alttpr.com or the desktop app's
+seed generator; only the inventory is shared. Each item has one holder at a
+time: find it and it is yours, until a friend finds one in their own world and
+it moves to them, out of your game. The board lets you claim it back. Your
+game changes live.
 
-It works by reading/writing SNES WRAM live (the SRAM mirror at `$7EF000`),
-exactly like the reference tools it was built from (TwitchBot SNI, AlttprHelper,
-ALTTPRFollowerInjector). RAM addresses and game-mode gating follow the
-[ALTTPR-REFERENCE](https://github.com/AllAboutBill/ALTTPR-REFERENCE) docs.
+No install beyond SNI, no accounts. The room link is the key.
 
-**On-screen messages.** Every item move sends the involved players a short
-personal message — *"Lamp stolen from Bill"*, *"Hot potato - Bow is yours"*,
-*"Sword borrowed by Ted (60s)"*, *"Host gave you Sword (Gold)"*. They render
-**inside the game itself**, on the HUD strip, with no ROM patch: the agent
-writes the message as tilemap words into the HUD buffer (`$7EC700`) using the
-game's own resident uppercase font (the same tiles that draw "LIFE") and sets
-the HUD-upload flag (`$7E0016`), so the game's NMI displays it — on any
-transport, including SNI/real hardware. Messages also appear on RetroArch's
-OSD and as a toast + activity line in the desktop app. Placement is
-verifiable/tunable with `python -m tools.hud_text_test "YOUR TEXT"`.
+HyruleLink reads inventory bytes and writes items. That is why it is its own
+app and not an EtherNet mode: EtherNet's rule is that only the module byte
+leaves a racer's PC.
 
-*One writer per strip.* When BillognaBot (the streaming bot) runs on the same
-PC it writes its own lines to that strip (bits, points, welcomes…), so the
-agent hands its messages to the bot's `POST http://127.0.0.1:5000/api/hud/say`
-instead of racing it cell-for-cell. The bot replies `shown:false` when it
-can't draw (its emulator link is down) and the agent draws locally; when the
-bot isn't running at all the agent draws locally and doesn't knock again for
-30 s. `HYRULELINK_BOT_HUD=0` turns forwarding off (or set it to another URL).
+## What it does
 
-**Save-aware syncing.** The agent only writes items while a save is actually
-loaded (`MODE` `$7E0010` in a playable module) — grants/revokes that arrive at
-the title screen or file select are queued and applied when gameplay resumes.
-Passing through the file-select/loading modules re-seeds pickup detection and
-requests a full resync, so reloading an older save can't re-report reverted
-items as fresh finds or leave the game out of step with the ledger.
+| | |
+|---|---|
+| **Shared pool** | 29 progression items (sword, bow, boots, hookshot, the rods, the medallions, Moon Pearl and the rest; no ammo, bottles or dungeon items). One holder per item. A find always takes it. You can claim only what you have found yourself, and you get it back at the best tier *you* found. |
+| **Board** | The room page: every item with its holder and tier, Claim with its cooldown, the players with their game-link state, the activity log. Watchers see the same board without Claim. |
+| **Game link** | The page talks to **SNI** or **QUsb2Snes** on the player's PC, which covers snes9x-nwa and other NWA emulators, RetroArch, BizHawk / snes9x-rr (Lua) and the FXPak Pro. It reports finds and writes grants and revokes, only while a save is loaded. |
+| **In-game messages** | Lines on the HUD strip in the game's own font, with no ROM patch: `SWORD TAKEN FROM ANA`. One switch per browser. |
+| **Modes** | Normal, Hot Potato, Chaos, and Custom: a rule editor with seven presets. The host picks. |
+| **Host controls** | Rename, mode, cooldown, custom rules, mark an item found or set its holder for any player, remove a player, reset progression. |
+| **Rooms** | "Your rooms on this browser" on the front page is the way back in; "Live rooms" lists the rooms anyone can watch. A room nobody uses for 14 days is removed. `operator.html` lists and deletes every room, behind a key. |
+| **Desktop app** | The Windows app from before the browser client still works against the same server and rooms: seed generation, sprites, emulator launch, direct NWA and RetroArch links, a server of your own. |
 
-## Pieces
+## The documents
+
+| Read this | When |
+|---|---|
+| [docs/USING.md](docs/USING.md) | You play or host. A co-op start to finish, linking a game, what the page reads and writes, modes, the desktop app. |
+| [docs/DEVELOPING.md](docs/DEVELOPING.md) | You are changing the code. Local run, the fake game, tests, the hard constraints, the traps already paid for. |
+| [docs/PROTOCOL.md](docs/PROTOCOL.md) | The exact interfaces: routes, websocket messages, the room document, the game memory. |
+| [deploy/README.md](deploy/README.md) | It is on the droplet: what runs where, how to deploy, check and roll back. |
+| [docs/BROWSER_PLAN.md](docs/BROWSER_PLAN.md) | The record of how the browser client was built, package by package. |
+
+## How it moves
 
 ```
-shared/   item catalog (progression pool) + WebSocket protocol
-server/   FastAPI hub: accounts, rooms, authoritative ledger, web UI  (port 5019)
-agent/    local app next to each emulator: polls pickups, applies grant/revoke
-web/      browser UI: room grid + Claim buttons + activity log
+player's browser  -- /ws "ui" ------>  HyruleLink server
+   |              -- /ws "agent" --->  rooms, the ledger, the rules
+   |
+   +--- ws://localhost:23074 ---> SNI / QUsb2Snes ---> emulator or FXPak Pro
+                                  reads $7E0010 (the module) and $7EF342-$7EF38E (the inventory),
+                                  writes item bytes, the boots run flag, the bow and arrow
+                                  bytes, 20 HUD cells and one flag
 ```
 
-The **server** is the single source of truth. **Agents and browsers dial OUT**
-to it over one WebSocket, so it can live on a public host (your droplet) and
-every remote player just needs the URL — no port-forwarding.
+The page keeps two sockets to the room: `ui` for the board, claims and host
+controls, and `agent` once a game is linked on that PC. The desktop app's
+agent uses the same `agent` role; the server cannot tell them apart. The
+server decides who holds what and sends `grant`, `revoke` and `notify` to that
+player's agent, and the player's own page (or app) writes them into the game
+next to it. The server never touches a game. What leaves a player's PC: the
+items it finds (key and level), whether a game is linked, and whether each
+write took.
 
-## Web UI style
+## Run it here
 
-The `web/` view shares **billogna.lol's "aurora" design language** (2026-06-28
-restyle) so the spectator page and the main site feel like one product.
+Windows, no terminal: `Install.cmd` once (makes `.venv`, installs
+`requirements.txt`, fetches SNI), then `Start Server.cmd` for a server at
+http://localhost:5019/ or `Play.cmd` for the desktop app.
 
-- **Palette:** mint `#b3ffc8`, violet `#8a6bff`, blue `#5eadff` over near-black
-  `#070709`. No pink — accents are mint/violet/blue only.
-- **Type:** [Unbounded](https://fonts.google.com/specimen/Unbounded) for
-  headings, [DM Mono](https://fonts.google.com/specimen/DM+Mono) for body.
-- **Background layers** (all `aria-hidden`, behind the content): three drifting
-  gradient blobs → a faint **pixel field** canvas (`nexus-bg.js`) → an SVG
-  **noise** grain overlay.
-- **Pixel-hover gimmick:** interactive elements fill with a subtle grayscale /
-  steel-blue **pixel shimmer** on hover/focus, ported from billogna.lol.
-  Borderless text (logo, header links) gets a soft radial edge-fade instead of a
-  hard rectangle.
-- **Cards & buttons** are translucent "glass" (`backdrop-filter: blur`) so the
-  pixel field shows through; the item `#grid` buttons are excluded from the
-  hover effect (too many, recreated often).
-
-Style-only files in `web/` (no game logic):
-
-```
-style.css        aurora palette, blobs, glass cards, .hl-pixel-* helpers
-nexus-bg.js      animated pixel-field background canvas (#nexus-pixels)
-pixel-canvas.js  Ryan Mulligan's <pixel-canvas> web component
-pixel-hover.js   injects <pixel-canvas> behind buttons / links / logo on hover
-items/           item sprites (ALTTPR tracker art) shown in the board
-```
-
-Mirror billogna.lol if you re-theme: keep these in sync with the copies under
-that site's `shared/` so both stay on the same palette and component versions.
-
-**Item sprites** (`web/items/<key>.png`, plus `<key>-1..N.png` for progressive
-tiers) come from the ALTTPR community tracker and are shared by both UIs: the web
-grid loads them from `/static/items/`, and the desktop app scales/dims them with
-Pillow. `shared.items.item_image(key, level)` is the single source of truth for
-which sprite a given item/tier uses, so the two views never drift.
-
-## Shared pool
-
-Progression items only: sword, shield, mail, gloves, bow, boots, hookshot, fire/
-ice rod, bombos/ether/quake, lamp, hammer, bug net, book, somaria, byrna, cape,
-mirror, flippers, moon pearl, blue/red boomerang, mushroom, powder, shovel,
-flute, magic upgrade. **Excluded:** ammo (rupees/bombs/arrows/hearts), bottles
-(they're consumable-like, not progression), and per-dungeon items
-(keys/maps/compasses).
-
-> ⚠ Disabling movement items (Moon Pearl, Flippers, Gloves) can briefly strand a
-> robbed player until they Claim something back. That's the intended tension —
-> and why the Claim button exists (the in-world chest is one-time).
-
-## Quick start — no terminal, no login (Windows)
-
-**First time, once:** double-click **`Install.cmd`** (sets up Python + deps).
-
-**The app already points at the public server** (`https://hyrulelink.billogna.lol`)
-— most groups need nothing else. Don't want to use the website? In the app, use
-**Host a server on THIS PC**:
-- It launches a local server and shows the `http://<your-ip>:port` URL for
-  **same-network** players.
-- Tick **"make it reachable over the internet (free tunnel)"** and it also spins
-  up a **Cloudflare quick tunnel** — you get a public `https://…trycloudflare.com`
-  link to share with players on **any** network, **no port forwarding, no
-  account** (first use downloads `cloudflared` once).
-
-Or run **`Start Server.cmd`** for a standalone local server.
-
-**Everyone plays from one app — double-click `Play.cmd`:**
-1. Type your **name**.
-2. **Join** with a code, **Host a new room** (on the server shown), or
-   **Host a server on THIS PC** — you get a room code to share.
-3. The **game board appears right in the app**. Need a seed? Click **Generate
-   seed** (makes an Open seed from your own JP 1.0 base ROM — no AlttprHelper).
-   Then **Launch emulator** (auto-configured network-ready) or start your own,
-   and **Connect & Play**.
-
-That's the whole flow — **no accounts, no passwords, no config files, no commands**.
-The board, Claim buttons, player list, connection health, and host controls are
-all inside the app window. The room code is the only thing you share. **Re-joining
-the same room** reconnects you as the *same* player (your items are kept), not a
-duplicate.
-
-> The web page (`http://server:5019/`) is the **spectator / second-screen** view.
-> Its home page lists **live rooms by name** — click **Watch** to spectate any
-> room read-only (no account, no player created). Rooms are **public to watch but
-> private to play**: the join **code is never shown in the list**, so only people
-> you give the code to can join as a player (paste it in *Join with a code*).
-> `…/?watch=<public-id>` deep-links straight into watching (the app's *Spectator
-> view* button uses this; players still share the secret code out-of-band).
-
-### Host & admin controls
-
-- **Host** (whoever created the room) gets controls in both the app and the web:
-  set the steal **cooldown**, **remove** a player, and **right-click any item**
-  (app) / use the **player chips** (web) to fix who has *found* an item or who
-  *owns* it — handy after a disconnect.
-- **Game modes** (host-set, shown to everyone with a banner; claiming is off):
-  - 🔥 **Hot Potato** — each item you're holding auto-passes to the next *online*
-    player who's found it after a timer (round-robin). You can't keep anything.
-  - 🌀 **Chaos** — every found item is randomly reassigned among its online
-    finders on a shared timer.
-  - **Normal** — the usual find/claim/steal game.
-- **Global admin via Discord.** Click **Login with Discord** on the web page;
-  your server's **owner and mod roles** become HyruleLink admins — **delete any
-  room** and **manage / kick** in *any* room (not just ones you host). Configure
-  it with the `DISCORD_*` + `SESSION_SECRET` env vars (see `.env.example`); you can
-  reuse an existing Discord app by adding `…/auth/callback` to its OAuth redirects.
-  With it unconfigured, global admin is simply unavailable (hosts still run their
-  own rooms).
-
-> **Supported emulators (all auto-detected):**
-> - **snes9x-nwa** (EmuNetworkAccess build) — direct, nothing extra.
-> - **RetroArch** (any SNES core) — the app enables the network setting for you.
-> - **snes9x-rr, BizHawk, real hardware (SD2SNES/FXPak), and more** — via the
->   **SNI bridge, installed by `Install.cmd`**. Click **Start SNI** in the app (or just say
->   Yes when Connect & Play offers it). Real hardware then connects with nothing
->   else to do; for snes9x-rr/BizHawk the app points you at the `Connector.lua`
->   to load in the emulator. If you already run SNI/QUsb2Snes, it uses that one.
-> - *Not* supported: plain mainline snes9x with no network build / no Lua — it
->   exposes no memory. Use snes9x-nwa or RetroArch.
->
-> RetroArch also shows HyruleLink events directly over gameplay: item transfers
-> identify the other player, and Chaos emits one `Items shuffled` notice. Other
-> transports ignore these OSD-only notifications safely.
->
-> In the app, **"Which emulators?"** explains all of this.
-
-Third-party tools live under `tools/`: **SNI** (MIT) is downloaded from its
-pinned upstream release by `Install.cmd` with SHA-256 verification, and
-**cloudflared** (Apache-2.0) downloads on first use. Both launch only on demand.
-
-## Advanced / manual (any OS, terminal)
+By hand, from the repo root in Git Bash:
 
 ```bash
-pip install -r requirements.txt
-python run_server.py --port 5019 --open     # server + open browser
-python run_agent.py --setup                 # player: login/join, writes config
-python run_agent.py                          # player: connect + play
+.venv/Scripts/python.exe -m pip install -r requirements.txt -r requirements-dev.txt
+.venv/Scripts/python.exe run_server.py --port 5019          # http://localhost:5019/
+.venv/Scripts/python.exe -m unittest discover -s tests       # everything, node units included
+.venv/Scripts/python.exe tools/fake_snes.py                  # a stand-in game, see DEVELOPING
 ```
 
-Server environment variables (the server auto-loads a git-ignored `.env`; see
-`.env.example`):
+## The repo
 
 ```
-DISCORD_CLIENT_ID / DISCORD_CLIENT_SECRET   Discord OAuth app (global admin login)
-DISCORD_REDIRECT_URI    e.g. https://hyrulelink.billogna.lol/auth/callback
-DISCORD_GUILD_ID        your server; owner + mod roles below get admin
-DISCORD_MOD_ROLE_IDS    comma-separated role ids that count as admin
-SESSION_SECRET          random string signing the login cookie
-HYRULELINK_ROOM_TTL_DAYS  auto-delete rooms idle this long (default 14)
-HYRULELINK_DB           sqlite path (default server/hyrulelink.db)
+server/       app.py (FastAPI: REST, /ws, web/ at the root), ledger.py (who holds what, the rules,
+              the connection hub), operator.py (the operator gate), db.py (sqlite), auth.py (Discord,
+              desktop app only), rate_limit.py, names.py
+shared/       items.py (the catalog), protocol.py (message names), rules.py (rule defaults, presets)
+web/          index.html (front door), room.html (the room), operator.html
+web/js/       items.js (generated), effects.js, agent.js (the browser agent), hud.js, snes.js,
+              game.js, room.js, home.js, operator.js, claim-policy.js
+agent/        the desktop app's agent: agent.py, effects.py, sni/ (links, item writes, HUD), romtools/
+agent_gui.py  the desktop app (Tk)
+tools/        fake_snes.py (a stand-in game), coop_check.js (a two-player round, no browser),
+              gen_items_js.py (writes web/js/items.js), make_mark.py; for the desktop app:
+              install_sni.ps1, sni/ (SNI's Lua connector), hud_text_test.py, fonts/
+tests/        unittest suite; web/units.js (node units, run by the suite too)
+deploy/       deploy.sh and what it installs, see deploy/README.md
+docs/         USING, DEVELOPING, PROTOCOL, BROWSER_PLAN
 ```
 
-Or run a specific config (several agents on one PC):
-`python run_agent.py --config agent/config_a.json`.
+## What is proven, and what is not
 
-Load your seed in the emulator and play normally. Pickups are detected and
-reported automatically; grants/revokes are written into your game live.
+Proven 2026-09-21, on this PC:
 
-## Config (`agent/config.json`)
+- **The test suite.** Server routes, including the desktop app's frozen
+  shapes; websocket hellos for all three roles; the operator gate; the ledger
+  and rules; the Python agent's item writes; the fake bridge; Python 3.10
+  syntax; `items.js` against the catalog; the page URL rules. Node units for
+  `hud.js`, `snes.js`, `items.js`, `effects.js` and `agent.js`, and a replay
+  of every grant and revoke through the Python and the JS item writers, which
+  make the same reads and writes in the same order.
+- **A two-player round with no browser** (`tests/test_coop_e2e.py` running
+  `tools/coop_check.js`): two fake games, the real server, the page's own game
+  modules under node. Seven steps, each within 3 s: (1) a find; (2) a steal by
+  find, with a line on both HUD strips; (3) a claim back at the player's own
+  tier; (4) the boots run flag leaving with the boots and put back when the
+  game drops it; (5) silver bow at one player's tier and wood at the other's,
+  with the equip byte and 30 arrows on the claim back; (6) a revoke that lands
+  on the file select waiting for the save, then applied with a resync and no
+  phantom pickup; (7) every pickup sent is a find the game made.
+- **The room page in Chrome against `tools/fake_snes.py`** (the room
+  package's acceptance run): the game row found the fake, finds poked into it
+  reached the board at the right tier, and a claim by a second player put a
+  line on the fake's HUD strip. Real clicks, focus rings and the clipboard
+  were not part of it.
 
-```json
-{
-  "server_http": "http://YOUR_SERVER:5019",
-  "server_ws":   "ws://YOUR_SERVER:5019/ws",
-  "room": "ABC123",
-  "player_id": 1,
-  "player_token": "…",
-  "transport": "emu",
-  "poll_interval": 1.0
-}
-```
+**Live deploy and real-Chrome QA: pending.**
 
-## Deploying updates (production)
+Proven elsewhere and relied on: EtherNet's `snes.js` and `hud.js`, which
+these are copies of, wrote HUD lines into a real snes9x-nwa through the real
+SNI from a live HTTPS page (2026-09-20), and read through QUsb2Snes 0.7.35 for
+18 minutes (2026-09-21).
 
-The public server (`https://hyrulelink.billogna.lol`) runs on a droplet at
-`/opt/hyrulelink`, which is a **git checkout of `master`** served by the
-`hyrulelink.service` systemd unit (behind nginx). To ship a change:
+Not proven yet: item writes from a browser into a real game; writes through
+QUsb2Snes; an FXPak, where a WRAM write goes through the cartridge's command
+hook; a real two-PC session. Safari does not let a web page reach a program
+on the same computer, so it cannot link a game.
 
-1. Commit + push to `origin/master`.
-2. On the droplet, run the deploy helper:
+## Desktop app
 
-   ```bash
-   /root/deploy-hyrulelink.sh        # git pull --ff-only + restart ONLY if server code changed
-   ```
+`Play.cmd` (after `Install.cmd`) opens the Windows app. It still works and
+still points at `https://hyrulelink.billogna.lol`. It joins the same rooms as
+the browser, and adds what a web page cannot do:
 
-The web UI is served from `web/` per-request, so **web/static changes go live on
-pull with no restart**; only `server/`, `shared/`, `run_server.py`, or
-`requirements.txt` changes trigger `systemctl restart hyrulelink` (which the
-helper does automatically). Server-local state is git-ignored and untouched by
-pulls: `.env` (secrets) and `server/hyrulelink.db`.
+- **Seeds:** *Generate seed* rolls a seed on alttpr.com from a preset, or
+  patches one from its permalink, onto your own JP 1.0 base ROM, with a player
+  sprite, palette shuffle, a follower sprite and MSU-1 packs.
+- **Emulator:** *Launch* starts it, set up for a network link.
+- **Links:** straight to snes9x-nwa (NWA) and RetroArch (network commands),
+  or through SNI, which `Install.cmd` fetches and *Start SNI* starts.
+  RetroArch also shows the lines on its on-screen display.
+- **Your own server:** *Start local server* runs one on this PC for the LAN;
+  *Create a public internet link* adds a free Cloudflare quick tunnel
+  (cloudflared downloads on first use).
+- **Discord login:** *Connect Discord* keeps your seat across devices and gives
+  the Discord server's mods admin in every room.
+- **BillognaBot:** when the streaming bot runs on the same PC, the agent hands
+  its lines to the bot's HUD writer (`POST http://127.0.0.1:5000/api/hud/say`)
+  instead of racing it on the same strip. `HYRULELINK_BOT_HUD=0` turns that off.
 
-> SSH note: connect as `ssh root@<droplet-ip>` with the default key. UFW
-> rate-limits SSH (drops an IP after ~6 new connections in 30s, seen as
-> connection *timeouts*) — avoid firing many rapid connections.
+Either the app or a browser is your game link, not both: see
+[docs/USING.md](docs/USING.md#one-game-link-per-player).
 
-## Notes & limits (v1)
-
-- Only one client may attach to a QUsb2Snes device at a time — close
-  EmoTracker/LiveSplit if the agent can't attach.
-- Detection only fires while in a playable game mode, so file-select/transition
-  bytes never produce phantom pickups.
-- The agent echo-cancels its own writes, so applying a grant/revoke never
-  re-broadcasts as a pickup.
+RAM addresses and game-mode gating follow
+[ALTTPR-REFERENCE](https://github.com/AllAboutBill/ALTTPR-REFERENCE) and the
+tools the agent was built from (TwitchBot SNI, AlttprHelper,
+ALTTPRFollowerInjector). Item sprites in `web/items/` come from the ALTTPR
+community tracker. The SNI (MIT) and cloudflared (Apache-2.0) programs are
+downloaded from their upstream releases, not committed.
