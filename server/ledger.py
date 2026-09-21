@@ -798,9 +798,9 @@ class RoomHub:
         for ws in self.agents.get(code, {}).values():
             for item in ITEMS:
                 await self._send(ws, {"type": P.REVOKE, "item": item.key})
-            await self._send(ws, {"type": P.NOTIFY, "text": "Room reset - fresh start!"})
+            await self._send(ws, {"type": P.NOTIFY, "text": "Room reset - fresh start"})
         await self.broadcast_event(
-            code, "Host reset the room — all progression cleared. Re-roll your seeds!")
+            code, "Host reset the room — all progression cleared. Re-roll your seeds.")
         await self.broadcast_state(code)
 
     # ── game modes: auto-shuffle engine ──────────────────────────────────────
@@ -829,7 +829,8 @@ class RoomHub:
             await self.broadcast_event(code, "Host set mode to Normal — claiming is back on.")
         else:
             await self.broadcast_event(
-                code, f"Host started {MODE_LABELS[room.mode]} — items shuffle every "
+                code, f"Host started {MODE_LABELS[room.mode]} — items "
+                      f"{'pass on' if room.mode == MODE_HOT_POTATO else 'shuffle'} every "
                       f"{int(room.shuffle_s)}s. Claiming is off.")
         await self.broadcast_state(code)
 
@@ -1013,14 +1014,14 @@ class RoomHub:
                 got.setdefault(new, []).append(BY_KEY[key].name)
                 self._reassign(room, key, new, now, grants, revokes)
             if got:
-                events.append("🌀 Chaos shuffle! Items moved.")
+                events.append("🌀 Chaos shuffle: items moved.")
                 for uid in sorted(set(got) | set(lost)):
                     parts = []
                     if got.get(uid):
                         parts.append("got " + ", ".join(got[uid]))
                     if lost.get(uid):
                         parts.append("lost " + ", ".join(lost[uid]))
-                    notifies.append((uid, "Shuffle! " + " - ".join(parts)))
+                    notifies.append((uid, "Shuffle: " + " - ".join(parts)))
 
         if grants or revokes:
             await self._send_commands(code, grants, revokes, notifies)

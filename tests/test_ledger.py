@@ -190,7 +190,7 @@ class LedgerTests(unittest.TestCase):
         for agent in (a1, a2):                              # exhaustive revoke + notify
             revoked = {m["item"] for m in agent.messages if m.get("type") == P.REVOKE}
             self.assertEqual(revoked, {item.key for item in ITEMS})
-            self.assertIn("Room reset - fresh start!",
+            self.assertIn("Room reset - fresh start",
                           [m.get("text") for m in agent.messages if m.get("type") == P.NOTIFY])
 
 
@@ -274,8 +274,8 @@ class NotificationTests(unittest.TestCase):
         resolve_pickup(room, 2, "lamp", 1)          # both found it; B holds it
         with mock.patch("server.ledger.random.choice", lambda seq: seq[0]):  # → player 1
             asyncio.run(hub._tick_room(room.code, room, time.time()))
-        self.assertIn("Shuffle! got Lamp", self.notifies(a1))
-        self.assertIn("Shuffle! lost Lamp", self.notifies(a2))
+        self.assertIn("Shuffle: got Lamp", self.notifies(a1))
+        self.assertIn("Shuffle: lost Lamp", self.notifies(a2))
 
     def test_host_give_and_take_notify_the_players(self):
         hub, room, a1, a2 = self.hub_room()
