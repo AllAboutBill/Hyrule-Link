@@ -21,7 +21,7 @@ and exits 1 on any difference.
 
 Writes web/img/bombos.svg (the medallion alone, for the wordmark: a 16x16 box
 drawn at 32 px, so every sprite pixel lands on whole screen pixels) and
-web/img/mark.svg (the same on a dark rounded tile, for the browser tab), or
+web/img/bombos-mark.svg (the same on a dark rounded tile, for the browser tab), or
 the same two files in --out. The SVG is one rect per run of same-coloured
 pixels with crispEdges, so it is the sprite, pixel for pixel, at any size.
 Adapted from EtherNet's make_mark.py. Needs Pillow; only run when the art
@@ -133,13 +133,13 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     (out / "bombos.svg").write_text(
         head.format(n=16) + rects(grid, (16 - w) / 2, (16 - h) / 2) + "</svg>\n", encoding="utf-8", newline="\n")
-    (out / "mark.svg").write_text(
+    (out / "bombos-mark.svg").write_text(
         head.format(n=TILE_N) + f'<rect width="{TILE_N}" height="{TILE_N}" rx="4" fill="{TILE}" shape-rendering="auto"/>'
         + rects(grid, (TILE_N - w) / 2, (TILE_N - h) / 2) + "</svg>\n", encoding="utf-8", newline="\n")
     key = {c: "abcdefghijklmnop"[i] for i, c in enumerate(palette)}
     for row in grid:
         print("  " + "".join(key[c] if c else "." for c in row))
-    print(f"wrote bombos.svg + mark.svg; {w}x{h} px, {len(palette)} colours:",
+    print(f"wrote bombos.svg + bombos-mark.svg; {w}x{h} px, {len(palette)} colours:",
           " ".join(f"{key[c]}=#{c[0]:02x}{c[1]:02x}{c[2]:02x}" for c in palette))
     if args.check:
         ref = load_clean(args.check)

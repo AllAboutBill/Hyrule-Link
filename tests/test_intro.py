@@ -1,6 +1,6 @@
 """The Bombos mark and the Bombos fire, once per open.
 
-web/img/bombos.svg (the logo) and web/img/mark.svg (the tab icon) are drawn
+web/img/bombos.svg (the logo) and web/img/bombos-mark.svg (the tab icon) are drawn
 by tools/make_mark.py from web/items/bombos.png, and running it again gives
 the same files byte for byte. web/js/intro.js parses, keeps its rules (once a
 tab session, never for reduced motion, never on a front page that is only
@@ -67,9 +67,9 @@ class MarkTests(unittest.TestCase):
 
     def test_the_tab_icon_is_the_same_pixels_on_a_tile(self):
         logo = _sprite(IMG / "bombos.svg", 16)
-        tile = _sprite(IMG / "mark.svg", 22)
+        tile = _sprite(IMG / "bombos-mark.svg", 22)
         self.assertEqual(tile, {(x + 3, y + 3): c for (x, y), c in logo.items()})
-        root = ET.parse(IMG / "mark.svg").getroot()
+        root = ET.parse(IMG / "bombos-mark.svg").getroot()
         first = next(root.iter(SVG + "rect"))
         self.assertEqual((first.get("width"), first.get("height"), first.get("fill")), ("22", "22", "#0E0E10"))
 
@@ -80,7 +80,7 @@ class MarkTests(unittest.TestCase):
                 done = subprocess.run([sys.executable, str(TOOL), "--out", out], capture_output=True,
                                       text=True, encoding="utf-8", errors="replace", timeout=120, cwd=str(ROOT))
                 self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-            for name in ("bombos.svg", "mark.svg"):
+            for name in ("bombos.svg", "bombos-mark.svg"):
                 with self.subTest(name):
                     first = (Path(a) / name).read_bytes()
                     self.assertEqual(first, (Path(b) / name).read_bytes())

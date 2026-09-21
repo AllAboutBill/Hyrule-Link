@@ -331,7 +331,7 @@ test and `compileall`.
 | fake game (`tools/fake_snes.py`) | EtherNet's `tools/fake_snes.py`, plus the item-poke control API |
 | two-player harness (`tools/coop_check.js`) | the shape of EtherNet's `tools/hud_check.js` |
 | look, fonts, front door, operator page and gate | EtherNet's `ethernet.css` tokens and components, its bundled fonts (StreamStudio's), `index.html`, `operator.html` and its server's operator key rules |
-| the mark (`web/img/bombos.svg`, the favicon `mark.svg`) and the intro (`web/js/intro.js`) | the Bombos medallion, made for the rename on 2026-09-21; `tools/make_mark.py` (adapted from EtherNet's) draws the pixel mark. Until then the mark was the Hookshot item sprite (`web/img/hookshot.svg`). |
+| the mark (`web/img/bombos.svg`, the favicon `bombos-mark.svg`, a new name so the week-long image cache cannot serve the old hookshot tile) and the intro (`web/js/intro.js`) | the Bombos medallion, made for the rename on 2026-09-21; `tools/make_mark.py` (adapted from EtherNet's) draws the pixel mark. Until then the mark was the Hookshot item sprite (`web/img/hookshot.svg`). |
 | RAM addresses, game modes | [ALTTPR-REFERENCE](https://github.com/AllAboutBill/ALTTPR-REFERENCE), z3randomizer, and the tools the agent was built from (TwitchBot SNI, AlttprHelper, ALTTPRFollowerInjector) |
 | item sprites (`web/items/`) | the ALTTPR community tracker |
 

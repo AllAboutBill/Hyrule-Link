@@ -230,7 +230,7 @@ select.field option { background: var(--surface); color: var(--ink); }
 
 .brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); flex: none; }
 .brand:hover { color: var(--ink); }
-/* the hookshot, pixel for pixel (tools/make_mark.py). 32 px is exactly 2x the
+/* the Bombos medallion, pixel for pixel (tools/make_mark.py). 32 px is exactly 2x the
    16 px box, so every pixel of it lands on whole screen pixels. */
 .brand img { width: 32px; height: 32px; flex: none; image-rendering: pixelated; }
 .brand .word { font: 700 20px/1 var(--display); letter-spacing: -.02em; }
