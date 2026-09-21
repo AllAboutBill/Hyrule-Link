@@ -47,6 +47,7 @@ from starlette.datastructures import MutableHeaders
 from starlette.websockets import WebSocketClose
 
 from server import db, auth, names, operator
+from server import connect
 from server.rate_limit import RateLimiter, client_key
 from server.ledger import hub, resolve_pickup, resolve_claim, ownership_commands
 from shared import protocol as P
@@ -171,6 +172,7 @@ def _prune_rooms():
         hub.uis.pop(c, None)
         hub.admin_uis.pop(c, None)
         hub.apply_failures.pop(c, None)
+        connect.end_in_background(hub.cams.pop(c, None))
     if codes:
         print(f"[cleanup] pruned {len(codes)} idle room(s): {', '.join(codes)}")
 
@@ -318,8 +320,10 @@ async def delete_room(handle: str, request: Request):
     row = db.get_room_by_pub(handle) or db.get_room(handle.upper())
     if row:
         code = row["code"]
+        cams = hub.cams.get(code)
         await hub.drop_room(code)    # close live connections + forget in memory
         db.delete_room(code)         # then remove persisted rows
+        connect.end_in_background(cams)
     return {"ok": True}
 
 
@@ -536,6 +540,7 @@ async def _serve_ui(ws, code, user_id, is_admin=False):
     payload["items"] = [{"key": it.key, "name": it.name,
                          "image": item_image(it.key, it.present)} for it in ITEMS]
     await ws.send_json(payload)
+    await connect.hello(hub, code, ws, user_id)     # this player's own cam seat link, if any
     while True:
         msg = await ws.receive_json()
         mtype = msg.get("type")
@@ -583,6 +588,56 @@ async def _serve_ui(ws, code, user_id, is_admin=False):
                 await hub.admin_reset_room(code)
 
 
+# ── QuakeCast cams (server/connect.py; off unless HYRULELINK_CONNECT_URL) ────
+_CAMS_LIMIT = RateLimiter(10, 60)
+
+
+def _cams_caller(code: str, request: Request, payload: dict) -> str:
+    """The room's code, if the caller may open or close its cams: the host,
+    by their own seat, or a Discord admin (as for the admin_* messages)."""
+    if not connect.enabled():
+        raise HTTPException(404, "not found")
+    _rate_limit(request, _CAMS_LIMIT, "cams")
+    code = code.upper()
+    room = hub.get_room(code)
+    if room is None:
+        raise HTTPException(404, "no such room")
+    if (_session_from_request(request) or {}).get("admin"):
+        return code
+    try:
+        pid = int(payload.get("player_id", 0))
+    except (TypeError, ValueError):
+        pid = 0
+    if not db.player_by_token(code, pid, str(payload.get("player_token") or "")):
+        raise HTTPException(403, "bad room/player token")
+    if pid != room.host:
+        raise HTTPException(403, "host only")
+    return code
+
+
+@app.post("/api/rooms/{code}/cams")
+async def cams_open(code: str, request: Request, payload: dict = Body(...)):
+    """Open a QuakeCast room for two to four players. Each seat link goes to
+    that player's own ui sockets as {type:"cams", url}; this reply has none."""
+    code = _cams_caller(code, request, payload)
+    try:
+        cams = await connect.open_cams(hub, code, payload.get("seats") or [], client_key(request))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except LookupError:
+        raise HTTPException(404, "no such room")
+    except connect.ConnectError as e:
+        raise HTTPException(502, str(e))
+    return {"ok": True, "cams": cams}
+
+
+@app.post("/api/rooms/{code}/cams/close")
+async def cams_close(code: str, request: Request, payload: dict = Body(...)):
+    code = _cams_caller(code, request, payload)
+    warning = await connect.close_cams(hub, code)
+    return {"ok": True, "warning": warning} if warning else {"ok": True}
+
+
 # ── static UI ──────────────────────────────────────────────────────────────
 @app.get("/")
 def index():
@@ -613,8 +668,10 @@ async def operator_delete_room(code: str, request: Request):
     if not db.get_room(code):
         raise HTTPException(404, "no such room")
     live = len(hub.agents.get(code, {})) + len(hub.uis.get(code, {}))
+    cams = hub.cams.get(code)
     await hub.drop_room(code)    # close live connections + forget in memory
     db.delete_room(code)         # then remove persisted rows
+    connect.end_in_background(cams)
     print(f"[operator] deleted room {code} ({live} connection(s) closed)")
     return {"ok": True, "deleted": code}
 
