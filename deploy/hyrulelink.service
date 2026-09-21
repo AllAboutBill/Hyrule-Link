@@ -1,0 +1,18 @@
+[Unit]
+Description=HyruleLink co-op server
+After=network.target
+
+[Service]
+# root: the sqlite file and its -wal/-shm live in this root-owned checkout.
+# .env, server/hyrulelink.db* and server/operator.key sit beside the code and
+# are git-ignored, so a deploy (a fast-forward) never touches them.
+User=root
+WorkingDirectory=/opt/hyrulelink
+ExecStart=/opt/hyrulelink/.venv/bin/python run_server.py --host 127.0.0.1 --port 5019
+Restart=always
+RestartSec=3
+# the box has 2 GB and is already into swap; the server needs well under 100 MB
+MemoryMax=300M
+
+[Install]
+WantedBy=multi-user.target

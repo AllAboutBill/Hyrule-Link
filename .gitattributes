@@ -1,0 +1,6 @@
+# deploy.sh is piped to the droplet's bash; a CR breaks it. Windows launchers
+# stay CRLF. Everything in deploy/ is LF: the unit is compared byte for byte
+# with the live one and nginx_install.py is piped into python3 over ssh.
+*.sh      text eol=lf
+*.cmd     text eol=crlf
+deploy/*  text eol=lf
