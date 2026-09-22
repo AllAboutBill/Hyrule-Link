@@ -49,7 +49,8 @@ SITEBAR = re.compile(r"""<nav\b[^>]*\bclass=["']sitebar["'][^>]*>.*?</nav>""", r
 SITEBAR_APP = re.compile(r"""<a\b([^>]*)>([^<]*)</a>""")
 # The three medallion apps, in the game's order: Bombos, Ether, Quake.
 SIBLINGS = (("BombosSwap", "./"), ("EtherNet", "https://www.billogna.lol/ethernet/"),
-            ("QuakeCast", "https://www.billogna.lol/connect/"))
+            ("QuakeCast", "https://www.billogna.lol/connect/"),
+            ("CuccoStorm", "https://www.billogna.lol/cuccostorm/"))
 
 # The old name, however it is spaced or cased. Code names (css/hyrulelink.css,
 # the hyrulelink.* storage keys) keep it; nothing a reader sees may.
@@ -174,12 +175,14 @@ class SourceTests(unittest.TestCase):
                 bar = SITEBAR.search(page)
                 self.assertIsNotNone(bar, f"{name} has no sitebar")
                 for href in ("https://www.billogna.lol/", "https://www.billogna.lol/ethernet/",
-                             "https://www.billogna.lol/connect/"):
+                             "https://www.billogna.lol/connect/", "https://www.billogna.lol/cuccostorm/"):
                     self.assertIn(f'href="{href}"', bar.group(0))
 
-    def test_the_bar_lists_the_three_medallion_apps_in_order(self):
+    def test_the_bar_lists_the_four_apps_in_order(self):
         """BombosSwap (this site, ./), EtherNet, QuakeCast: the game's
-        medallion order, on every page."""
+        medallion order, then CuccoStorm, on every page. The self link carries
+        aria-current="page" everywhere, the operator page too: under 440 px
+        the stylesheet hides it so the other three fit 360 px."""
         for name in PAGES:
             page = (WEB / name).read_text(encoding="utf-8")
             with self.subTest(name):
@@ -189,8 +192,7 @@ class SourceTests(unittest.TestCase):
                        for attrs, text in SITEBAR_APP.findall(sibs.group(1))]
                 self.assertEqual(got, list(SIBLINGS))
                 here = SITEBAR_APP.findall(sibs.group(1))[0][0]
-                if name != "operator.html":
-                    self.assertIn('aria-current="page"', here)
+                self.assertIn('aria-current="page"', here)
 
     def test_no_page_shows_the_old_name(self):
         """Renamed BombosSwap on 2026-09-21. Comments, file names and storage
